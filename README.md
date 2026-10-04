@@ -1,0 +1,423 @@
+# CV Formatter Logiclever
+
+Outil qui transforme les CV de consultants (PDF, Word, images scannées) en **CV au format Logiclever** :
+un **PowerPoint modifiable** et un **PDF prêt à envoyer** par consultant, photo comprise quand le CV en contient une.
+
+> **Règle d'or : l'outil n'invente rien.** Chaque information affichée vient du CV d'origine et a été
+> vérifiée deux fois (contrôle automatique + contre-vérification par le modèle). Ce qui ne peut pas être
+> retrouvé dans le CV est retiré, et tout ce qui a été retiré, signalé, calculé ou masqué est listé dans un rapport.
+
+Ce projet a été entièrement conçu et codé avec **Claude Code**. Ce document explique comment il fonctionne,
+les choix qui ont été faits, et la logique suivie à chaque étape, pour pouvoir le maintenir et le faire évoluer.
+
+---
+
+## Sommaire
+
+1. [Utilisation (équipe commerciale)](#1-utilisation-équipe-commerciale)
+2. [Vue d'ensemble : comment ça marche](#2-vue-densemble--comment-ça-marche)
+3. [Le détail de chaque étape](#3-le-détail-de-chaque-étape)
+4. [Choix de conception et raisons](#4-choix-de-conception-et-raisons)
+5. [Données, cache et corrections manuelles](#5-données-cache-et-corrections-manuelles)
+6. [Architecture du code et points de réglage](#6-architecture-du-code-et-points-de-réglage)
+7. [Comment le projet a été construit et validé](#7-comment-le-projet-a-été-construit-et-validé)
+8. [Coût, confidentialité, sécurité](#8-coût-confidentialité-sécurité)
+9. [Limites connues](#9-limites-connues)
+10. [Dépannage](#10-dépannage)
+
+---
+
+## 1. Utilisation (équipe commerciale)
+
+### Installation (une seule fois par poste)
+
+1. Installer **Python 3.11+** depuis <https://www.python.org> (cocher « Add Python to PATH »).
+2. Double-cliquer sur **`Installer.bat`** : installe les composants Python et les polices Lexend
+   (sans droits administrateur), puis ouvre le fichier `.env`.
+3. Dans `.env`, coller la clé OpenAI après `OPENAI_API_KEY=` et enregistrer.
+4. Fermer PowerPoint s'il était ouvert (pour qu'il voie les polices Lexend).
+
+PowerPoint (ou, à défaut, LibreOffice) doit être installé pour produire les PDF.
+
+### Au quotidien
+
+1. Télécharger les CV depuis Google Drive (dossier `drive-download-…` ou `.zip`) dans le dossier du projet.
+2. Double-cliquer sur **`Formater les CV.bat`** (le `drive-download-*` le plus récent est traité ; on peut
+   aussi glisser-déposer des fichiers ou dossiers sur le `.bat`).
+3. Résultats dans **`sortie/`** :
+   - `CV Logiclever - Prénom NOM.pptx` (modifiable) et `.pdf` (à envoyer) ;
+   - **`rapport.md`** : pour chaque CV, ce qui a été retiré, ce qui est à vérifier, comment la pastille
+     d'expérience a été calculée, ce qui a été masqué faute de place — **à lire avant tout envoi**.
+
+**Version anonyme** : `Formater les CV (anonymes).bat` → dossier `sortie anonyme/` (initiales, pas de photo,
+ni e-mail, ni téléphone, ni LinkedIn ; la ville et le titre sont conservés).
+
+### Ligne de commande
+
+```
+python -m cv_formatter [dossiers | fichiers | .zip] [options]
+```
+
+| Option | Effet |
+|---|---|
+| *(aucune entrée)* | traite le dossier ou `.zip` `drive-download-*` le plus récent du projet |
+| `--anonymiser` | CV anonyme : initiales, ni photo, ni e-mail/téléphone/LinkedIn ; nom retiré du texte, des noms de fichiers et des métadonnées |
+| `--sans-coordonnees` | retire e-mail, téléphone, localisation et LinkedIn (nom et photo conservés) |
+| `--pages-max N` | nombre de pages maximal (défaut : 1 page si le CV d'origine tient sur une page, sinon pages de suite réservées aux expériences) |
+| `--depuis-json` | régénère **sans appeler l'API**, à partir des extractions enregistrées (après correction manuelle) |
+| `--forcer` | ré-extrait les CV même s'ils ont déjà été traités |
+| `--sans-controle` | désactive la contre-vérification (second appel au modèle) |
+| `--sans-pdf` | ne produit que les PowerPoint |
+| `--sortie DOSSIER` | dossier de sortie (défaut : `sortie`) |
+| `--modele`, `--effort` | modèle OpenAI (défaut `gpt-6-luna`) et effort de raisonnement (défaut `high`) |
+| `--template FICHIER.pptx` | autre modèle PowerPoint (champs repérés par leurs balises `{{…}}`) |
+
+---
+
+## 2. Vue d'ensemble : comment ça marche
+
+Le principe : **le modèle d'IA lit et structure, le code décide**. Le LLM (GPT-6 Luna) ne sert qu'à
+comprendre des CV aux mises en page très variées et à en extraire le contenu dans un format strict.
+Tout le reste — vérification, calculs, mise en page, photo, export — est du code déterministe, mesurable et
+reproductible.
+
+```mermaid
+flowchart TD
+    A[CV source<br/>PDF / DOCX / image] --> B[1. Lecture<br/>texte, liens, OCR, photos candidates, date du PDF]
+    B --> C{Extraction déjà<br/>en cache ?}
+    C -- non --> D[2. Extraction GPT-6 Luna<br/>JSON strict, mot pour mot]
+    C -- oui --> E
+    D --> E[(sortie/_donnees/*.json)]
+    E --> F[3. Contre-vérification GPT-6 Luna<br/>chaque affirmation confrontée au PDF]
+    F --> G[4. Contrôle déterministe<br/>nombres, noms, outils, e-mail, téléphone…]
+    G --> H[5. Calculs<br/>années d'expérience, dates, tri]
+    H --> I[6. Mise en page<br/>mesure du texte, 1 page, colonne droite, pagination]
+    I --> J[7. Export<br/>PowerPoint : PDF + PPTX avec polices intégrées]
+    J --> K[rapport.md<br/>retiré / à vérifier / calculé / masqué]
+```
+
+Chaque CV passe par ces étapes indépendamment ; une erreur sur un CV n'arrête pas le lot.
+Les extractions et contre-vérifications sont mises en cache : relancer l'outil ne rappelle pas l'API
+tant que le CV source n'a pas changé.
+
+---
+
+## 3. Le détail de chaque étape
+
+### 3.1 Lecture du CV source — `pdf_source.py`, `ocr.py`
+
+- **Conversion** : Word/ODT/RTF → PDF via LibreOffice (Word en secours) ; images → PDF via PyMuPDF.
+- **Texte** : extrait deux fois (ordre du flux PDF + ordre de lecture), car les CV multi-colonnes mélangent
+  l'ordre du texte. Normalisation : ligatures, accents LaTeX séparés (« Ing´enieur » → « Ingénieur »).
+- **Liens hypertextes** du PDF : récupèrent par exemple l'URL LinkedIn cachée derrière une icône.
+- **OCR** : une page avec moins de 40 caractères de texte mais des images est considérée comme scannée →
+  OCR intégré de Windows (français), Tesseract en secours. Le texte OCR est marqué « peu fiable » : les
+  contrôles signalent au lieu de retirer (une erreur d'OCR ne doit pas faire disparaître une information vraie).
+- **Date du document** (métadonnées PDF) : sert à avertir quand un CV a plus d'un an.
+- **Photos candidates** : images des pages 1–2 ayant une taille et des proportions de portrait (voir 3.7).
+
+### 3.2 Extraction par GPT-6 Luna — `extraction.py`, `schema.py`
+
+- **API** : OpenAI Responses API, `client.responses.parse(..., text_format=CV)` → sortie **JSON strict**
+  validée par Pydantic. Le PDF est envoyé tel quel (le modèle voit le texte **et** l'image de chaque page),
+  avec en complément le texte extrait, les liens et les vignettes des photos candidates.
+- **Schéma** (`schema.py`) : tous les champs sont obligatoires mais peuvent valoir `null`/liste vide. C'est ce
+  qu'exige le mode strict, et cela oblige le modèle à dire explicitement « absent » au lieu d'inventer.
+  Les descriptions des champs font partie de la consigne (ex. : TOEIC → langues, pas certifications).
+- **Consigne** (`SYSTEM_PROMPT`) : ne rien inventer ni déduire ; reprendre le texte **mot pour mot** (seules
+  corrections permises : fautes évidentes, accents cassés, casse, ponctuation) ; tout en français (traduction
+  fidèle si besoin, noms propres et outils conservés) ; le texte visible prime sur les liens ; classer
+  rigoureusement alternances et stages.
+- `reasoning={"effort": "high"}`, `store=False` (pas de conservation côté OpenAI).
+- **Cache** : le résultat est enregistré dans `sortie/_donnees/<nom du fichier>.json` avec l'empreinte SHA-256
+  du CV source ; il n'est ré-extrait que si le CV change (ou avec `--forcer`).
+
+### 3.3 Garde-fou n°1 : contrôle déterministe — `verification.py`
+
+Chaque information extraite est recherchée dans le texte du CV d'origine (casse et accents ignorés).
+
+| Règle | Exemple de ce qui est attrapé |
+|---|---|
+| Tout **nombre** (date, %, montant, effectif) doit exister dans le CV | « 7 équipes » alors que le CV dit 2 |
+| Tout **sigle**, mot en **CamelCase**, **nom propre** en milieu de phrase doit exister | une certification « PMP » absente du CV |
+| **E-mail** présent dans le texte visible ; **téléphone** (9 derniers chiffres) ; **LinkedIn** dans le texte ou les liens | un e-mail tiré d'un lien qui n'est pas celui du candidat |
+| Années de début/fin présentes dans la période écrite | une date décalée d'un an |
+| CV en français : moins de 60 % des mots retrouvés → « à vérifier » | une reformulation trop libre |
+
+Tolérances voulues : correspondance approchée ≥ 0,85 (fautes corrigées : « Microsft » → « Microsoft »),
+formes collées (« Power BI » = « PowerBI »), texte collé dans le PDF (« de140 » = « de 140 »), nombres écrits
+en lettres (« trois » = 3), suffixes (« 3ème » = « 3ième »).
+
+**Décision** : introuvable → l'élément est **retiré** (une puce, un outil, une certification…) ; pour un champ
+d'une expérience (poste, entreprise, lieu), seul ce champ est vidé. Si le texte de référence est incertain
+(OCR) ou si le JSON a été **modifié à la main**, rien n'est retiré : tout est seulement signalé.
+
+### 3.4 Garde-fou n°2 : contre-vérification par le modèle — `controle.py`
+
+Un second appel GPT-6 Luna reçoit le PDF et la liste numérotée de toutes les affirmations extraites
+(poste + employeur + dates, chaque puce, chaque outil, certification, diplôme, langue, années d'expérience…)
+et répond pour chacune : `confirme`, `absent` ou `inexact`.
+
+- `absent` sur un élément atomique (puce, outil, certification, formation…) → **retiré**.
+- `absent`/`inexact` sur une **expérience entière** → seulement **signalé** : une expérience regroupe plusieurs
+  faits, et un seul attribut douteux ne doit pas la faire disparaître (les champs inventés sont retirés un à un
+  par le contrôle déterministe).
+- **Nature** (alternance/stage) : affirmation formulée « le CV ne présente pas cette expérience comme une
+  alternance ou un stage ». Si le modèle la juge `inexact`, l'expérience est **exclue du calcul des années**
+  et signalée — elle n'est jamais retirée.
+- `inexact` sur le reste → signalé « à vérifier ».
+- Les verdicts sont mis en cache dans le JSON (empreinte des données + `CONTROLE_VERSION`).
+
+Ce second regard attrape ce que le contrôle par mots-clés ne peut pas voir : une réalisation rattachée à la
+mauvaise expérience, un employeur déduit (un nom présent dans le titre mais pas pour la mission), un outil qui
+est en fait une méthode.
+
+### 3.5 Années d'expérience (pastille) — `contenu.py`
+
+La pastille « N ans d'expérience » affiche des années **prouvées par les dates du CV** :
+
+1. **Comptent** : emploi, mission, freelance, création d'entreprise.
+   **Ne comptent pas** : alternance, stage, bénévolat, jobs étudiants (tutorat…), projets.
+   Une mention « alternance », « apprentissage » ou « stage » dans l'intitulé, le contexte ou la période
+   l'emporte sur la classification du modèle.
+2. **Union des périodes** : les chevauchements ne comptent qu'une fois, les **trous ne comptent pas**.
+3. Poste « en cours » : compté **jusqu'à aujourd'hui** ; si le CV a plus d'un an, un avertissement demande de
+   vérifier qu'il est toujours d'actualité.
+4. Dates à l'année seule : « 2020 – 2022 » = 2 ans ; face à une date au mois près, l'année seule est lue au
+   milieu de l'année.
+5. **Arrondi à l'année inférieure.**
+6. Si le CV **écrit** un nombre d'années, il est **vérifié** : si les dates en justifient moins, c'est le nombre
+   justifié qui s'affiche (« le CV annonce 16 ans mais ses dates n'en justifient que 15 ») ; si le CV n'a pas de
+   dates, le nombre écrit est gardé et signalé « à confirmer ». Aucune période exploitable → pas de pastille.
+
+Le détail du calcul (mois retenus, expériences exclues et pourquoi) figure dans le rapport.
+
+### 3.6 Mise en page — `layout.py`, `render_pptx.py`, `contenu.py`
+
+**Le modèle.** L'outil utilise une copie nettoyée du modèle Google Slides (`assets/modele_cv_logiclever.pptx`,
+83 Ko au lieu de 6 Mo : mises en page et images inutilisées retirées, sous-ensembles de polices supprimés).
+Les zones sont repérées par leurs balises (`{{nom}}`, `{{experiences}}`, `{{si}}`…), les titres de section
+par leur texte, les icônes de coordonnées par proximité ; le modèle peut donc évoluer sans changer le code.
+
+**Mesure du texte.** PowerPoint ne calcule pas la hauteur du texte pour nous. Chaque mot est mesuré avec les
+vraies polices Lexend (`pymupdf.Font.text_length`) et la césure est reproduite ligne par ligne.
+Le modèle de hauteur (**interligne = 1,2 × taille × espacement**) a été **calibré sur le rendu réel de
+PowerPoint** : césure et hauteurs identiques (marge de sécurité 1 %). C'est ce qui permet de garantir qu'un
+texte tient dans sa zone sans le vérifier à l'œil.
+
+**En-tête.**
+- Nom « Prénom NOM » : sur une ligne de préférence (37 → 28 pt), sinon deux lignes (jusqu'à 22 pt), puis trois.
+- Titre du consultant ajouté sous le nom (le modèle n'a pas de champ titre) : ≤ 2 lignes, raccourci au premier
+  séparateur (« — », « | »…) s'il est trop long, en dernier recours tronqué avec « … » visible.
+- Pastille d'expérience : élargie si besoin ; supprimée s'il n'y a rien de prouvé.
+- Coordonnées : lignes absentes supprimées avec leur icône, les autres remontent ; police réduite pour tenir
+  sur une ligne ; **e-mail et LinkedIn cliquables** (lien posé sur la zone, pour garder le texte noir non
+  souligné du modèle).
+- Photo : détachée du bord de la feuille, alignée sur la marge du texte et sur le bas de la pastille ; sans
+  photo, le nom s'aligne à gauche.
+
+**Colonne de droite** (Compétences → Certifications → Formation) : empilée selon la hauteur réelle du contenu.
+Elle reste **toujours sur la page 1** : police réduite jusqu'à 75 %, puis masquage des spécialités de
+formation, puis des derniers éléments des listes les plus longues (en gardant des minimums : 5 outils,
+2 certifications, 3 domaines d'expertise…). Tout ce qui est masqué est listé dans le rapport.
+Le bloc des outils s'intitule « SI & outils » : il regroupe logiciels, plateformes et technologies.
+
+**Colonne gauche** (expériences) et **règle d'une page** :
+- **Une page par défaut** si le CV d'origine tient sur une page : police réduite jusqu'à 80 %, puis bénévolat
+  retiré, projets condensés puis retirés, puis puces masquées en partant des expériences les plus anciennes
+  (les deux plus récentes restent complètes).
+- **Pages de suite** uniquement si le CV d'origine fait plusieurs pages (ou s'il est impossible de tenir sur une
+  page même condensé), et **seulement pour les expériences** — jamais pour les compétences ou la formation.
+  Titre « Expériences (suite) », expérience coupée avec rappel « … (suite) », titres jamais orphelins en bas de
+  page, paragraphe démesuré découpé au mot.
+- Rien n'est réécrit ni résumé : on réduit, on masque des détails, et on le dit.
+
+**Typographie** : nettoyage des puces (puce parasite, ponctuation finale, majuscule initiale sans toucher aux
+graphies de marque comme « spaCy » ou « eMI3 ») ; titres, postes et diplômes saisis en MAJUSCULES remis en casse
+normale en gardant les sigles (« CHEF DE PROJET SI JUNIOR » → « Chef de projet SI junior ») — jamais les noms
+d'entreprise ; périodes en français (« Juin 2022 – Aujourd'hui ») si elles concordent avec le texte du CV, sinon
+le texte du CV tel quel ; expériences triées de la plus récente à la plus ancienne ; une formation également
+rangée en certification n'est affichée qu'une fois.
+
+### 3.7 Photo — `pdf_source.py`
+
+1. **Candidates** : images de 60 px minimum, proportions 0,55–1,8, occupant 0,2 % à 15 % de la page.
+2. **Choix** : le modèle reçoit les vignettes et indique laquelle est le visage du consultant (ou aucune).
+3. **Recadrage sur la zone réellement visible** : la page est rendue avec et sans l'image ; la différence des
+   pixels donne exactement ce que l'on voit dans le CV — y compris pour une photo **pivotée**, rognée en
+   **cercle** ou **détourée**. L'extérieur du masque est blanchi, puis recadrage carré (haut privilégié pour un
+   portrait vertical), JPEG 800 px.
+
+### 3.8 Export et polices — `export_pdf.py`, `fonts.py`
+
+- Le modèle Google Slides n'embarque que des **sous-ensembles** de Lexend : sans la police installée, PowerPoint
+  remplacerait des caractères. `fonts.py` télécharge Lexend (licence SIL OFL, fichier `OFL.txt` joint) et
+  l'installe **pour l'utilisateur** (registre HKCU, sans droits administrateur).
+- **PowerPoint** (COM, une seule session pour le lot) enregistre le **PDF**, puis ré-enregistre le **PPTX avec les
+  polices complètes intégrées** : le PowerPoint s'affiche correctement même sur un poste sans Lexend.
+  LibreOffice sert de secours.
+
+### 3.9 Anonymisation — `anonymisation.py`
+
+Initiales à la place du nom (titre conservé) ; pas de photo, d'e-mail, de téléphone ni de LinkedIn (la ville
+reste) ; nom, e-mails, téléphones et URL LinkedIn effacés de **tout** le texte ; métadonnées neutres ;
+fichiers nommés « CV Logiclever - N. A. - Titre (anonyme) ». Les noms d'employeurs et de clients sont
+conservés (pratique habituelle d'un dossier de compétences).
+
+### 3.10 Rapport — `rapport.py`
+
+`rapport.md`, un bloc par CV : fichiers produits, origine de l'extraction, contre-vérification, photo, calcul
+de la pastille, sections non reprises (hobbies, « À propos »…), ajustements de mise en page, avertissements,
+**éléments retirés** et **éléments à vérifier** avec la raison de chacun.
+
+---
+
+## 4. Choix de conception et raisons
+
+| Choix | Pourquoi | Alternative écartée |
+|---|---|---|
+| LLM pour lire, code pour tout le reste | Les CV ont des mises en page imprévisibles (Canva, LaTeX, Word, multi-colonnes) ; le reste doit être exact et reproductible | Analyse par règles (impossible à généraliser) ; tout confier au LLM (non vérifiable) |
+| GPT-6 Luna | Seul accès LLM disponible ; ~20× moins cher que GPT-6 Sol, lit les PDF (texte + images), JSON strict | GPT-6 Sol (trop cher pour l'usage) |
+| Sortie JSON stricte + champs « nullables » | Force le modèle à déclarer l'absence d'une information au lieu de l'inventer | Texte libre à analyser |
+| Deux garde-fous indépendants | Le contrôle par mots-clés attrape les chiffres et noms inventés ; le modèle attrape les rattachements et déformations | Un seul niveau de contrôle |
+| Retirer plutôt que corriger, signaler plutôt que retirer en cas de doute | Ne jamais présenter au client une information non prouvée, sans pour autant perdre une information vraie | Corrections automatiques |
+| Années d'expérience calculées par le code | Les LLM calculent mal les dates ; règles explicites, vérifiables et expliquées dans le rapport | Laisser le modèle compter |
+| Une page, pages de suite réservées aux expériences | Demande de l'équipe commerciale : un CV client se lit en une page | Pagination libre |
+| Réduire / masquer, jamais résumer | Résumer, c'est reformuler, donc risquer d'inventer | Résumés automatiques |
+| Mesure du texte avec les vraies polices, calibrée sur PowerPoint | Garantit l'absence de débordement sans intervention | Ajustement automatique de PowerPoint (non appliqué aux fichiers générés, rendu imprévisible) |
+| Photo par différence de rendu | Fidèle à ce qui est visible (rotations, cercles, détourages) | Extraire l'image brute (souvent pivotée ou beaucoup plus grande que la partie visible) |
+| Cache des extractions | Coût et temps : un CV n'est envoyé qu'une fois ; corrections manuelles possibles | Ré-extraction à chaque lancement |
+| Copie nettoyée du modèle, champs repérés par balises | Fichiers légers ; le modèle peut évoluer sans toucher au code | Positions codées en dur |
+| Polices installées + intégrées par PowerPoint | Rendu identique partout, PDF comme PPTX | Laisser les sous-ensembles du modèle (glyphes manquants) |
+| Liens posés sur la zone de texte | Cliquables dans le PDF sans le soulignement bleu imposé par PowerPoint | Lien sur le texte (souligné, hors charte) |
+| OCR Windows puis Tesseract | Déjà présent sur tous les postes Windows, français, hors ligne, gratuit | Service d'OCR en ligne |
+
+---
+
+## 5. Données, cache et corrections manuelles
+
+`sortie/_donnees/<fichier source>.json` :
+
+```json
+{
+  "_meta": {"source": "...", "sha256": "...", "extracteur": "gpt-6-luna", "effort": "high",
+            "date": "...", "empreinte": "...", "tokens_entree": 9000, "tokens_sortie": 4000},
+  "cv": { "prenom": "...", "nom": "...", "titre": "...", "contact": {"...": "..."}, "experiences": ["..."] },
+  "controle": {"version": 3, "empreinte": "...", "modele": "gpt-6-luna", "verdicts": ["..."]}
+}
+```
+
+- `sha256` : empreinte du CV source → ré-extraction seulement si le fichier change.
+- `empreinte` : empreinte des données extraites. Si vous **modifiez le JSON** puis relancez avec
+  `--depuis-json`, l'outil détecte la modification : vos corrections sont **conservées telles quelles** (les
+  contrôles ne font plus que signaler).
+- `controle` : verdicts de la contre-vérification, recalculés si les données ou la version des contrôles changent.
+- `photos/` : photos recadrées, réutilisées à chaque génération.
+
+---
+
+## 6. Architecture du code et points de réglage
+
+```
+cv_formatter/
+  __main__.py      orchestration : CLI, cache, appels API en parallèle, rendu, export, rapport
+  pdf_source.py    lecture du CV : conversion, texte, liens, OCR, date, photos candidates, recadrage
+  ocr.py           OCR Windows (français) puis Tesseract
+  extraction.py    appel OpenAI Responses (consigne système, JSON strict, gestion refus/troncature)
+  schema.py        structure Pydantic des données extraites et des verdicts
+  verification.py  contrôle déterministe anti-invention
+  controle.py      contre-vérification par le modèle (affirmations numérotées, application des verdicts)
+  contenu.py       règles métier : années d'expérience, dates, tri, typographie, styles des paragraphes
+  layout.py        mesure du texte (métriques Lexend) et modèle de paragraphes
+  render_pptx.py   remplissage du modèle : en-tête, colonne droite, pagination, pages de suite
+  export_pdf.py    PPTX → PDF via PowerPoint (polices intégrées) ou LibreOffice
+  anonymisation.py, rapport.py, fonts.py, config.py
+  assets/          modèle nettoyé + polices Lexend (OFL)
+```
+
+| Pour changer… | Où |
+|---|---|
+| Le modèle ou l'effort par défaut | `.env` (`OPENAI_MODEL`, `OPENAI_EFFORT`) ou `config.py` |
+| Les consignes d'extraction | `extraction.py` (`SYSTEM_PROMPT`) et les descriptions de `schema.py` |
+| Les types d'expérience qui comptent dans les années | `contenu.py` (`PRO_TYPES`, `effective_type`) |
+| Les tolérances du contrôle déterministe | `verification.py` (`Reference.has`, seuil 60 %) |
+| Ce que la contre-vérification peut retirer | `controle.py` (`apply_verdicts`) — incrémenter `CONTROLE_VERSION` si les affirmations changent |
+| Les styles (tailles, couleurs, espacements) | `contenu.py` (`experience_block`, `formation_paras`…) et `config.py` (couleurs, géométrie) |
+| La réduction minimale / les minimums de la colonne droite | `render_pptx.py` (`_right_column`, `RIGHT_MINIMUMS`) |
+| La règle d'une page et l'ordre de condensation | `render_pptx.py` (`_fit_left`) |
+| La position et la taille de la photo | `config.py` (`PHOTO_X`, `PHOTO_SIZE`, `PHOTO_BOTTOM`, `PHOTO_GAP`) |
+| Le modèle PowerPoint | `assets/modele_cv_logiclever.pptx` (garder les balises `{{…}}`) ou `--template` |
+
+---
+
+## 7. Comment le projet a été construit et validé
+
+Le projet a été développé avec Claude Code, par étapes, chaque étape étant vérifiée sur de vrais CV
+(rendu en image de chaque page produite, puis relecture face au CV d'origine).
+
+**Étapes clés et vérifications**
+
+1. **Analyse du modèle** Google Slides : géométrie de chaque zone, balises, couleurs du thème, découverte des
+   sous-ensembles de polices → installation de Lexend et copie nettoyée du modèle.
+2. **Calibrage de la mesure du texte** : diapositive de test rendue par PowerPoint, positions des lignes
+   relevées dans le PDF → interligne 1,2 × taille confirmé, césure prédite identique au rendu.
+3. **Photos** testées sur les cas difficiles : photo pivotée dans un cercle, cercle rogné, photo détourée.
+4. **Garde-fous** testés avec un faux modèle qui invente volontairement (un budget, une certification PMP,
+   « 7 équipes ») : les trois inventions sont retirées ; refus et réponses tronquées produisent un message clair.
+5. **OCR** testé sur un CV transformé en image : page détectée comme scannée, texte lu en français, contrôles
+   passés en mode « signalement ».
+6. **Tests de robustesse** : CV fictif extrême (nom de 60 caractères, titre de 200 caractères, 20 expériences,
+   puce de 3 000 caractères…) → aucun débordement, découpage et pagination corrects.
+7. **Premier passage réel avec GPT-6 Luna** : extractions fidèles (texte repris mot pour mot, alternances et
+   stages bien classés). Ce passage a révélé un vrai défaut, corrigé depuis : une affirmation sur la nature du
+   contrat (« le CV ne précise pas qu'il s'agit d'un emploi ») avait fait retirer des expériences entières →
+   désormais une expérience entière n'est jamais retirée par la contre-vérification seule, et la nature n'est
+   contrôlée que pour repérer une alternance ou un stage.
+
+**Retours de l'équipe intégrés**
+
+- Une seule page ; pages de suite uniquement pour les expériences des profils très expérimentés.
+- Années d'expérience : alternance et stages exclus ; création d'entreprise comptée ; poste en cours compté
+  jusqu'à aujourd'hui ; nombre annoncé dans le CV vérifié par les dates.
+- Libellé « SI & outils » (plus juste que « SI » pour une liste qui mélange outils et technologies).
+- E-mail et LinkedIn cliquables ; photo avec marges ; anonymisation ; OCR.
+
+**Comment vérifier après une modification** : relancer `python -m cv_formatter --depuis-json` (aucun appel API),
+ouvrir les PDF de `sortie/` et `rapport.md`. Pour un changement de mise en page, vérifier un CV court, un CV
+dense d'une page et un CV de plusieurs pages ; pour un changement de règle de contrôle, vérifier qu'aucun
+élément vrai n'est retiré (`0 retiré(s)` attendu sur des extractions fidèles).
+
+---
+
+## 8. Coût, confidentialité, sécurité
+
+- **Coût** : environ **0,01 $ par CV** avec `gpt-6-luna` (extraction + contre-vérification) ; un CV déjà traité
+  n'est pas renvoyé à l'API.
+- **Confidentialité** : les CV sont envoyés à l'API OpenAI avec `store=False` (pas de conservation des réponses ;
+  les données d'API ne servent pas à l'entraînement par défaut). Ne traiter que des CV que l'on est autorisé à
+  transmettre.
+- **Dépôt Git** : `.env` (clé API), les CV sources, `sortie/` et `sortie anonyme/` sont exclus par `.gitignore`
+  (données personnelles). Ne jamais les ajouter au dépôt.
+
+---
+
+## 9. Limites connues
+
+- Photo incrustée dans un CV **entièrement scanné** (une seule image par page) : non extraite.
+- Les noms d'entreprise en MAJUSCULES restent en majuscules (les remettre en casse normale risquerait de les
+  déformer : « BNP PARIBAS » → « Bnp Paribas »).
+- Un employeur ou un outil déduit par le modèle mais présent ailleurs dans le CV passe le contrôle
+  déterministe : c'est la contre-vérification qui le signale (« à vérifier »).
+- L'export PDF de qualité nécessite PowerPoint sous Windows (LibreOffice en secours, rendu légèrement différent).
+
+---
+
+## 10. Dépannage
+
+| Message | Solution |
+|---|---|
+| « clé OpenAI absente » | Créer `.env` (copie de `.env.example`) avec `OPENAI_API_KEY=…` |
+| « fichier de sortie verrouillé » | Fermer le PowerPoint/PDF ouvert puis relancer |
+| PDF avec une autre police | Fermer PowerPoint et relancer (polices Lexend tout juste installées) |
+| Un élément manque | Voir le rapport : retiré car introuvable, ou masqué faute de place ; corriger le JSON (`--depuis-json`) ou le PPTX |
+| Années d'expérience surprenantes | Le rapport détaille le calcul (mois retenus, expériences exclues et pourquoi) |

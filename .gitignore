@@ -1,0 +1,25 @@
+# Secret : clé API OpenAI
+.env
+
+# Données personnelles : CV sources et CV générés (ne jamais versionner)
+drive-download-*/
+drive-download-*.zip
+entree/
+sortie/
+sortie anonyme/
+
+# Modèle d'origine (6 Mo) : l'outil utilise la copie nettoyée cv_formatter/assets/modele_cv_logiclever.pptx
+Copy of Copy of CV 2025_Template_Logiclever.pptx
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Fichiers temporaires Office / système
+~$*
+*.~embed.pptx
+Thumbs.db
+desktop.ini
+.DS_Store

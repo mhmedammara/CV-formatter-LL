@@ -12,8 +12,12 @@ import os
 import shutil
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pymupdf
+
+if TYPE_CHECKING:
+    from winrt.windows.media.ocr import OcrEngine
 
 TESSERACT_DIRS = (
     Path(r"C:\Program Files\Tesseract-OCR"),
@@ -23,7 +27,7 @@ TESSERACT_DIRS = (
 
 
 @lru_cache(maxsize=1)
-def _windows_engine():
+def _windows_engine() -> OcrEngine | None:
     try:
         from winrt.windows.globalization import Language
         from winrt.windows.media.ocr import OcrEngine
@@ -51,7 +55,10 @@ async def _windows_ocr_async(png: bytes) -> str:
     stream.seek(0)
     decoder = await BitmapDecoder.create_async(stream)
     bitmap = await decoder.get_software_bitmap_async()
-    result = await _windows_engine().recognize_async(bitmap)
+    engine = _windows_engine()
+    if engine is None:
+        return ""
+    result = await engine.recognize_async(bitmap)
     return "\n".join(line.text for line in result.lines)
 
 
@@ -73,8 +80,9 @@ def _tessdata() -> tuple[str, str] | None:
 def engine_name() -> str | None:
     if _windows_engine() is not None:
         return "OCR Windows"
-    if _tessdata() is not None:
-        return f"Tesseract ({_tessdata()[1]})"
+    tess = _tessdata()
+    if tess is not None:
+        return f"Tesseract ({tess[1]})"
     return None
 
 

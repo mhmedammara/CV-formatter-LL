@@ -5,12 +5,15 @@ from __future__ import annotations
 import copy
 import dataclasses
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from lxml import etree
 from pptx import Presentation
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+from pptx.presentation import Presentation as PresentationFile
+from pptx.slide import Slide
 
 from . import contenu, fonts
 from .config import (
@@ -36,7 +39,10 @@ from .config import (
     emu_to_cm,
 )
 from .layout import PT_PER_CM, Block, Para, Run, box_height, fits_one_line, line_count, para_height, scale, text_width
-from .schema import CV
+from .schema import CV, Certification, Experience, Formation, Langue
+
+# Élément XML de lxml : sa classe publique porte un nom « privé » (_Element) dans les annotations de lxml.
+Element = etree._Element  # pyright: ignore[reportPrivateUsage]
 
 NS = {
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
@@ -52,7 +58,11 @@ def q(tag: str) -> str:
 
 SHAPE_TAGS = {q("p:sp"), q("p:grpSp"), q("p:pic"), q("p:cxnSp")}
 CONTACT_FIELDS = ("email", "telephone", "localisation", "linkedin")
-RIGHT_BLOCKS = (("expertise", "EXPERTISE"), ("methode", "MÉTHODE"), ("langues", "LANGUES"), ("si", "SI & outils"))
+RIGHT_BLOCKS = (("expertise", "EXPERTISE"), ("langues", "LANGUES"), ("si", "SI & outils"))
+# Une liste de mots-clés trop courte met en avant des détails (« Scrum · AMDEC ») : en dessous de ce nombre
+# d'éléments, le bloc n'est pas affiché. Les langues, certifications et diplômes ne sont pas concernés.
+MIN_KEYWORD_ITEMS = 3
+KEYWORD_BLOCKS = {"expertise": "Expertise", "si": "SI & outils"}
 HEADER_GAP = 0.25  # espace avant un titre de section placé dans le flux
 CONTACT_RIGHT_EDGE = 20.75
 
@@ -60,21 +70,31 @@ CONTACT_RIGHT_EDGE = 20.75
 # --- Primitives XML ------------------------------------------------------------------
 
 
-def _xfrm(el):
-    if el.tag == q("p:grpSp"):
-        return el.find("p:grpSpPr/a:xfrm", NS)
-    return el.find("p:spPr/a:xfrm", NS)
+def child(el: Element, path: str) -> Element:
+    """Sous-élément obligatoire du modèle (erreur explicite s'il manque)."""
+    found = el.find(path, NS)
+    if found is None:
+        raise ValueError(f"Modèle PowerPoint inattendu : élément {path} introuvable")
+    return found
 
 
-def get_geom(el) -> tuple[float, float, float, float]:
+def _xfrm(el: Element) -> Element:
+    return child(el, "p:grpSpPr/a:xfrm" if el.tag == q("p:grpSp") else "p:spPr/a:xfrm")
+
+
+def _emu(el: Element, attr: str) -> int:
+    return int(el.get(attr, "0"))
+
+
+def get_geom(el: Element) -> tuple[float, float, float, float]:
     xfrm = _xfrm(el)
-    off, ext = xfrm.find("a:off", NS), xfrm.find("a:ext", NS)
-    return tuple(emu_to_cm(int(v)) for v in (off.get("x"), off.get("y"), ext.get("cx"), ext.get("cy")))
+    off, ext = child(xfrm, "a:off"), child(xfrm, "a:ext")
+    return emu_to_cm(_emu(off, "x")), emu_to_cm(_emu(off, "y")), emu_to_cm(_emu(ext, "cx")), emu_to_cm(_emu(ext, "cy"))
 
 
-def set_geom(el, x=None, y=None, w=None, h=None) -> None:
+def set_geom(el: Element, x: float | None = None, y: float | None = None, w: float | None = None, h: float | None = None) -> None:
     xfrm = _xfrm(el)
-    off, ext = xfrm.find("a:off", NS), xfrm.find("a:ext", NS)
+    off, ext = child(xfrm, "a:off"), child(xfrm, "a:ext")
     if x is not None:
         off.set("x", str(cm(x)))
     if y is not None:
@@ -85,16 +105,17 @@ def set_geom(el, x=None, y=None, w=None, h=None) -> None:
         ext.set("cy", str(cm(h)))
 
 
-def remove(el) -> None:
-    if el is not None and el.getparent() is not None:
-        el.getparent().remove(el)
+def remove(el: Element | None) -> None:
+    parent = el.getparent() if el is not None else None
+    if el is not None and parent is not None:
+        parent.remove(el)
 
 
-def text_of(el) -> str:
+def text_of(el: Element) -> str:
     return "".join(t.text or "" for t in el.iter(q("a:t")))
 
 
-def _rpr(run: Run, tag: str = "a:rPr"):
+def _rpr(run: Run, tag: str = "a:rPr") -> Element:
     rpr = etree.Element(q(tag))
     rpr.set("lang", "fr-FR")
     rpr.set("sz", str(int(round(run.size * 100))))
@@ -109,7 +130,7 @@ def _rpr(run: Run, tag: str = "a:rPr"):
     return rpr
 
 
-def _paragraph(para: Para):
+def _paragraph(para: Para) -> Element:
     p = etree.Element(q("a:p"))
     ppr = etree.SubElement(p, q("a:pPr"))
     margin = cm(para.indent)
@@ -136,16 +157,16 @@ def _paragraph(para: Para):
     return p
 
 
-def set_text(sp, paras: list[Para], anchor: str = "t") -> None:
-    body = sp.find("p:txBody", NS)
-    body_pr = body.find("a:bodyPr", NS)
+def set_text(sp: Element, paras: list[Para], anchor: str = "t") -> None:
+    body = child(sp, "p:txBody")
+    body_pr = child(body, "a:bodyPr")
     for key in ("lIns", "tIns", "rIns", "bIns"):
         body_pr.set(key, str(cm(TEXT_INSET)))
     body_pr.set("anchor", anchor)
     body_pr.set("wrap", "square")
-    for child in list(body_pr):
-        if child.tag in (q("a:normAutofit"), q("a:spAutoFit"), q("a:noAutofit")):
-            body_pr.remove(child)
+    for node in list(body_pr):
+        if node.tag in (q("a:normAutofit"), q("a:spAutoFit"), q("a:noAutofit")):
+            body_pr.remove(node)
     body_pr.insert(0, etree.Element(q("a:noAutofit")))
     for p in body.findall("a:p", NS):
         body.remove(p)
@@ -159,16 +180,16 @@ def set_text(sp, paras: list[Para], anchor: str = "t") -> None:
 # --- Modèle -------------------------------------------------------------------------
 
 
-def prepare_presentation(prs) -> None:
+def prepare_presentation(prs: PresentationFile) -> None:
     """Nettoie le modèle : mises en page inutilisées, sous-ensembles de polices intégrés."""
     for master in prs.slide_masters:
         for layout in list(master.slide_layouts):
             if not layout.used_by_slides:
                 master.slide_layouts.remove(layout)
-    pres = prs.part._element
+    pres = prs.element
     font_list = pres.find(q("p:embeddedFontLst"))
     if font_list is not None:
-        rel_ids = {el.get(q("r:id")) for el in font_list.iter() if el.get(q("r:id"))}
+        rel_ids = {rel for el in font_list.iter() if (rel := el.get(q("r:id")))}
         pres.remove(font_list)
         for rel_id in rel_ids:
             prs.part.drop_rel(rel_id)
@@ -178,33 +199,34 @@ def prepare_presentation(prs) -> None:
 
 
 class Template:
-    def __init__(self, prs):
+    def __init__(self, prs: PresentationFile):
         self.prs = prs
-        self.slide = prs.slides[0]
-        self.tree = self.slide.shapes._spTree
-        top = [el for el in self.tree if el.tag in SHAPE_TAGS]
-        self.placeholders: dict[str, etree._Element] = {}
+        self.slide: Slide = prs.slides[0]
+        self.tree: Element = self.slide.shapes.element
+        top: list[Element] = [el for el in self.tree if el.tag in SHAPE_TAGS]
+        self.placeholders: dict[str, Element] = {}
         for el in top:
             for name in re.findall(r"\{\{\s*(\w+)\s*\}+", text_of(el)):
                 self.placeholders.setdefault(name, el)
-        self.headers = {
+        self.headers: dict[str, Element] = {
             text_of(el).strip(): el for el in top if el.tag == q("p:grpSp") and text_of(el).strip()
         }
-        self.photo = next((el for el in top if el.tag == q("p:pic")), None)
+        self.photo: Element | None = next((el for el in top if el.tag == q("p:pic")), None)
         self.icons = self._contact_icons(top)
         self._next_id = 1000
 
-    def _contact_icons(self, top) -> dict[str, etree._Element]:
+    def _contact_icons(self, top: list[Element]) -> dict[str, Element]:
         """Associe à chaque coordonnée l'icône sans texte la plus proche sur la même ligne."""
         candidates = [el for el in top if not text_of(el).strip() and el.tag != q("p:pic")]
-        icons = {}
+        icons: dict[str, Element] = {}
         for name in CONTACT_FIELDS:
             box = self.placeholders.get(name)
             if box is None:
                 continue
             bx, by, _, bh = get_geom(box)
             center = by + bh / 2
-            best, best_dist = None, 0.8
+            best: Element | None = None
+            best_dist = 0.8
             for el in candidates:
                 x, y, w, h = get_geom(el)
                 if x + w > bx + 0.1 or bx - x > 1.6:
@@ -221,7 +243,7 @@ class Template:
         self._next_id += 1
         return self._next_id
 
-    def clone(self, el, tree):
+    def clone(self, el: Element, tree: Element) -> Element:
         copy_el = copy.deepcopy(el)
         for nv in copy_el.iter(q("p:cNvPr")):
             nv.set("id", str(self.new_id()))
@@ -229,7 +251,7 @@ class Template:
         return copy_el
 
 
-def _retitle_header(group, title: str) -> None:
+def _retitle_header(group: Element, title: str) -> None:
     text_sp = next(sp for sp in group.iter(q("p:sp")) if text_of(sp).strip())
     runs = list(text_sp.iter(q("a:t")))
     runs[0].text = title
@@ -238,15 +260,14 @@ def _retitle_header(group, title: str) -> None:
     rpr = text_sp.find(".//a:rPr", NS)
     size = int(rpr.get("sz", "1800")) / 100 if rpr is not None else 18.0
     needed = text_width(title, "medium", size) / PT_PER_CM + 2 * TEXT_INSET + 0.2
-    sp_xfrm = text_sp.find("p:spPr/a:xfrm", NS)
-    sp_ext = sp_xfrm.find("a:ext", NS)
-    delta = needed - emu_to_cm(int(sp_ext.get("cx")))
+    sp_ext = child(child(text_sp, "p:spPr/a:xfrm"), "a:ext")
+    delta = needed - emu_to_cm(_emu(sp_ext, "cx"))
     if delta > 0:
-        sp_ext.set("cx", str(int(sp_ext.get("cx")) + cm(delta)))
-        g_xfrm = group.find("p:grpSpPr/a:xfrm", NS)
+        sp_ext.set("cx", str(_emu(sp_ext, "cx") + cm(delta)))
+        g_xfrm = child(group, "p:grpSpPr/a:xfrm")
         for tag in ("a:ext", "a:chExt"):
-            ext = g_xfrm.find(tag, NS)
-            ext.set("cx", str(int(ext.get("cx")) + cm(delta)))
+            ext = child(g_xfrm, tag)
+            ext.set("cx", str(_emu(ext, "cx") + cm(delta)))
 
 
 # --- En-tête : photo, nom, titre, pastille, coordonnées ----------------------------
@@ -255,19 +276,20 @@ def _retitle_header(group, title: str) -> None:
 def _place_photo(t: Template, photo: Path | None) -> bool:
     if t.photo is None:
         return False
-    blip = t.photo.find(".//a:blip", NS)
-    old_rel = blip.get(q("r:embed"))
+    blip = child(t.photo, ".//a:blip")
+    old_rel = blip.get(q("r:embed"), "")
     if photo is not None:
         _, rel_id = t.slide.part.get_or_add_image_part(str(photo))
         blip.set(q("r:embed"), rel_id)
-        t.slide.part.drop_rel(old_rel)
-        descr = t.photo.find("p:nvPicPr/p:cNvPr", NS)
-        descr.set("descr", "Photo du consultant")
+        if old_rel:
+            t.slide.part.drop_rel(old_rel)
+        child(t.photo, "p:nvPicPr/p:cNvPr").set("descr", "Photo du consultant")
         # Photo détachée du bord de la feuille, alignée sur la marge du texte et sur le bas de la pastille.
         set_geom(t.photo, x=PHOTO_X, y=PHOTO_BOTTOM - PHOTO_SIZE, w=PHOTO_SIZE, h=PHOTO_SIZE)
         return True
     remove(t.photo)
-    t.slide.part.drop_rel(old_rel)
+    if old_rel:
+        t.slide.part.drop_rel(old_rel)
     return False
 
 
@@ -292,7 +314,7 @@ def _short_title(title: str) -> str:
 def _place_identity(t: Template, name: str, title: str | None, label: str | None, has_photo: bool, notes: list[str]) -> None:
     name_box = t.placeholders["nom"]
     pill = t.placeholders.get("experience_label")
-    nx, ny, nw, _ = get_geom(name_box)
+    nx, _, nw, _ = get_geom(name_box)
     pill_y = get_geom(pill)[1] if pill is not None else 5.32
     right = nx + nw
     nx = (PHOTO_X + PHOTO_SIZE + PHOTO_GAP if has_photo else NO_PHOTO_X) - TEXT_INSET
@@ -358,8 +380,13 @@ def _place_identity(t: Template, name: str, title: str | None, label: str | None
     set_text(pill, [Para([Run(label, "regular", 12, WHITE)], align="ctr")], anchor="ctr")
 
 
+def _clean_linkedin(value: str) -> str:
+    """URL LinkedIn sans paramètres de suivi (les exports LinkedIn ajoutent « ?jobid=…&lipi=… »)."""
+    return re.split(r"[?#]", value.strip(), maxsplit=1)[0]
+
+
 def _linkedin_display(value: str) -> str:
-    value = re.sub(r"^https?://", "", value.strip(), flags=re.I)
+    value = re.sub(r"^https?://", "", _clean_linkedin(value), flags=re.I)
     value = re.sub(r"^www\.", "", value, flags=re.I)
     return value.rstrip("/")
 
@@ -368,16 +395,16 @@ def _contact_url(name: str, value: str) -> str | None:
     if name == "email" and "@" in value:
         return "mailto:" + value.strip()
     if name == "linkedin":
-        url = value.strip()
+        url = _clean_linkedin(value)
         return url if re.match(r"https?://", url, re.I) else "https://" + url
     return None
 
 
-def _add_hyperlink(t: Template, box, url: str) -> None:
+def _add_hyperlink(t: Template, box: Element, url: str) -> None:
     """Rend la zone cliquable (lien conservé dans le PDF exporté). Le lien est posé sur la forme et non
     sur le texte : PowerPoint soulignerait sinon le texte, contrairement au style du modèle."""
     rel_id = t.slide.part.relate_to(url, RT.HYPERLINK, is_external=True)
-    c_nv_pr = box.find("p:nvSpPr/p:cNvPr", NS)
+    c_nv_pr = child(box, "p:nvSpPr/p:cNvPr")
     for old in c_nv_pr.findall("a:hlinkClick", NS):
         c_nv_pr.remove(old)
     link = etree.Element(q("a:hlinkClick"))
@@ -400,7 +427,7 @@ def _place_contacts(t: Template, values: dict[str, str | None]) -> None:
             continue
         if name == "linkedin":
             value = _linkedin_display(value)
-        x, y, _, h = get_geom(box)
+        x, y, _, _ = get_geom(box)
         new_y = slots[slot]
         slot += 1
         width = CONTACT_RIGHT_EDGE - x
@@ -420,74 +447,93 @@ def _place_contacts(t: Template, values: dict[str, str | None]) -> None:
 # --- Colonne de droite --------------------------------------------------------------
 
 
-RIGHT_MINIMUMS = {"si": 5, "certifications": 2, "expertise": 3, "formations": 1, "methode": 1, "langues": 1}
-RIGHT_NAMES = {"si": "SI & outils", "certifications": "certifications", "expertise": "expertise", "formations": "formations", "methode": "méthodes", "langues": "langues"}
+RIGHT_MINIMUMS = {"si": 5, "certifications": 2, "expertise": 3, "formations": 1, "langues": 1}
+RIGHT_NAMES = {"si": "SI & outils", "certifications": "certifications", "expertise": "expertise", "formations": "formations", "langues": "langues"}
 
 
-def _item_label(item) -> str:
-    for attr in ("intitule", "diplome", "langue"):
-        if hasattr(item, attr):
-            return getattr(item, attr)
-    return str(item)
+Item = str | Langue | Certification | Formation
+ItemList = list[str] | list[Langue] | list[Certification] | list[Formation]
+
+
+def _item_label(item: Item) -> str:
+    if isinstance(item, Certification):
+        return item.intitule
+    if isinstance(item, Formation):
+        return item.diplome
+    if isinstance(item, Langue):
+        return item.langue
+    return item
+
+
+@dataclass
+class _Placement:
+    element: Element | None
+    y: float
+    height: float = 0.0
+    paras: list[Para] | None = None  # None : titre de section (seule sa position change)
+
+
+Blocks = list[tuple[Element, list[Para]]]  # (zone du modèle, paragraphes) des blocs de Compétences
+Sections = list[tuple[str, Element, list[Para]]]  # (titre, zone, paragraphes) de Certifications et Formation
 
 
 def _right_column(t: Template, cv: CV, notes: list[str]) -> None:
     """Empile Compétences / Certifications / Formation sur la page 1, sans jamais créer de page :
     réduction jusqu'à 75 %, puis retrait des éléments les moins prioritaires (signalés au rapport)."""
-    items = {
-        "expertise": list(cv.expertise),
-        "methode": list(cv.methodes),
-        "langues": list(cv.langues),
-        "si": list(cv.outils_si),
-        "certifications": list(cv.certifications),
-        "formations": list(cv.formations),
-    }
+    expertise, si = list(cv.expertise), list(cv.outils_si)
+    langues, certifications, formations = list(cv.langues), list(cv.certifications), list(cv.formations)
+    items: dict[str, ItemList] = {"expertise": expertise, "langues": langues, "si": si, "certifications": certifications, "formations": formations}
+    for key, label in KEYWORD_BLOCKS.items():
+        if 0 < len(items[key]) < MIN_KEYWORD_ITEMS:
+            listed = ", ".join(_item_label(i) for i in items[key])
+            notes.append(f"Bloc « {label} » non affiché : seulement {len(items[key])} élément(s) ({listed}), trop peu pour un bloc")
+            items[key].clear()
     dropped: dict[str, list[str]] = {k: [] for k in items}
     details = True
     comp_header = t.headers.get("Compétences")
     top = get_geom(comp_header)[1] if comp_header is not None else 6.93
     boxes = {key: t.placeholders.get(key) for key, _ in RIGHT_BLOCKS}
     section_boxes = {"Certifications": t.placeholders.get("certifications"), "Formation": t.placeholders.get("formation")}
-    builders = {
-        "expertise": lambda: contenu.bullet_paras(items["expertise"]),
-        "methode": lambda: contenu.inline_para(items["methode"]),
-        "langues": lambda: contenu.langues_paras(items["langues"]),
-        "si": lambda: contenu.inline_para(items["si"]),
+    builders: dict[str, Callable[[], list[Para]]] = {
+        "expertise": lambda: contenu.bullet_paras(expertise),
+        "langues": lambda: contenu.langues_paras(langues),
+        "si": lambda: contenu.inline_para(si),
     }
 
-    def content():
-        comp = []
+    def content() -> tuple[Blocks, Sections]:
+        comp: Blocks = []
         for key, label in RIGHT_BLOCKS:
-            paras = builders[key]()
-            if boxes.get(key) is not None and paras:
-                comp.append((boxes[key], [contenu.label_para(label)] + paras))
-        sections = []
+            box, paras = boxes.get(key), builders[key]()
+            if box is not None and paras:
+                comp.append((box, [contenu.label_para(label)] + paras))
+        sections: Sections = []
         for title, paras in (
-            ("Certifications", contenu.certification_paras(items["certifications"])),
-            ("Formation", contenu.formation_paras(items["formations"], details)),
+            ("Certifications", contenu.certification_paras(certifications)),
+            ("Formation", contenu.formation_paras(formations, details)),
         ):
-            if paras and section_boxes.get(title) is not None:
-                sections.append((title, section_boxes[title], paras))
+            box = section_boxes.get(title)
+            if paras and box is not None:
+                sections.append((title, box, paras))
         return comp, sections
 
-    def stack(factor: float, comp: list, sections: list) -> tuple[float, list]:
-        placements = []
+    def stack(factor: float, comp: Blocks, sections: Sections) -> tuple[float, list[_Placement]]:
+        placements: list[_Placement] = []
         y = top
         if comp:
-            placements.append(("header", comp_header, y))
+            placements.append(_Placement(comp_header, y))
             y += SECTION_HEADER_HEIGHT - 0.1
             for box, paras in comp:
                 scaled = scale(paras, factor)
                 h = box_height(scaled, RIGHT_WIDTH)
-                placements.append(("box", box, y, h, scaled))
+                placements.append(_Placement(box, y, h, scaled))
                 y += h - 0.12
             y += 0.3
         for title, box, paras in sections:
-            placements.append(("header", t.headers.get(title), y))
+            placements.append(_Placement(t.headers.get(title), y))
             y += SECTION_HEADER_HEIGHT
             scaled = scale(paras, factor)
             h = box_height(scaled, RIGHT_WIDTH)
-            placements.append(("box", box, y, h, scaled))
+            placements.append(_Placement(box, y, h, scaled))
             y += h + 0.3
         return y - 0.3, placements
 
@@ -499,7 +545,7 @@ def _right_column(t: Template, cv: CV, notes: list[str]) -> None:
                 break
         if bottom <= CONTENT_BOTTOM:
             break
-        if details and any(f.details for f in items["formations"]):
+        if details and any(f.details for f in formations):
             details = False
             notes.append("Colonne de droite : spécialités/options des formations masquées faute de place")
             continue
@@ -526,14 +572,13 @@ def _right_column(t: Template, cv: CV, notes: list[str]) -> None:
     if not comp:
         remove(comp_header)
     for placement in placements:
-        if placement[0] == "header":
-            _, header, y = placement
-            if header is not None:
-                set_geom(header, y=y)
+        if placement.element is None:
+            continue
+        if placement.paras is None:  # titre de section
+            set_geom(placement.element, y=placement.y)
         else:
-            _, box, y, h, paras = placement
-            set_geom(box, x=RIGHT_X, y=y, w=RIGHT_WIDTH, h=h)
-            set_text(box, paras)
+            set_geom(placement.element, x=RIGHT_X, y=placement.y, w=RIGHT_WIDTH, h=placement.height)
+            set_text(placement.element, placement.paras)
 
 
 # --- Flux des expériences (colonne gauche puis pages de suite) -------------------------
@@ -549,7 +594,7 @@ class Header:
 class Segment:
     kind: str  # "text" | "header"
     y: float
-    paras: list[Para] = field(default_factory=list)
+    paras: list[Para] = field(default_factory=list[Para])
     title: str = ""
     source: str = ""
 
@@ -559,20 +604,20 @@ class Page:
     x: float
     top: float
     width: float
-    segments: list[Segment] = field(default_factory=list)
+    segments: list[Segment] = field(default_factory=list[Segment])
 
 
 MAX_PARA_HEIGHT = 12.0  # cm : au-delà, un paragraphe est coupé en morceaux paginables
 
 
-def _split_long_para(para: Para, width: float) -> list[Para]:
+def split_long_para(para: Para, width: float) -> list[Para]:
     """Coupe un paragraphe démesuré (ex. une puce de 3 000 caractères) en morceaux d'au plus
     MAX_PARA_HEIGHT, au mot près, sans rien retirer."""
     if para_height(para, width) <= MAX_PARA_HEIGHT:
         return [para]
     words = [(piece, run) for run in para.runs for piece in run.text.split(" ") if piece]
 
-    def make(chunk, first: bool) -> Para:
+    def make(chunk: list[tuple[str, Run]], first: bool) -> Para:
         runs: list[Run] = []
         for piece, run in chunk:
             if runs and runs[-1].style == run.style and runs[-1].size == run.size and runs[-1].color == run.color:
@@ -587,7 +632,8 @@ def _split_long_para(para: Para, width: float) -> list[Para]:
             keep_with_next=False,
         )
 
-    chunks, start, first = [], 0, True
+    chunks: list[Para] = []
+    start, first = 0, True
     while start < len(words):
         lo, hi = start + 1, len(words)
         while lo < hi:  # plus grand préfixe qui tient dans la hauteur maximale
@@ -603,8 +649,9 @@ def _split_long_para(para: Para, width: float) -> list[Para]:
 
 def _units(paras: list[Para]) -> list[list[Para]]:
     """Regroupe les paragraphes « garder avec le suivant » avec leur suivant."""
-    units, current = [], []
-    for para in (piece for p in paras for piece in _split_long_para(p, LEFT_WIDTH)):
+    units: list[list[Para]] = []
+    current: list[Para] = []
+    for para in (piece for p in paras for piece in split_long_para(p, LEFT_WIDTH)):
         current.append(para)
         if not para.keep_with_next:
             units.append(current)
@@ -614,11 +661,16 @@ def _units(paras: list[Para]) -> list[list[Para]]:
     return units
 
 
-def _paginate(flow: list, has_experience_header: bool) -> list[Page]:
+@dataclass
+class _FlowState:
+    text: Segment | None = None  # zone de texte en cours de remplissage
+
+
+def _paginate(flow: list[Block | Header], has_experience_header: bool) -> list[Page]:
     pages = [Page(LEFT_X, LEFT_TOP_PAGE1, LEFT_WIDTH)]
     # Section en cours : (titre affiché, groupe du modèle à copier pour l'en-tête « (suite) »).
     section: tuple[str, str] | None = ("Expériences", "Expériences") if has_experience_header else None
-    state = {"text": None}
+    state = _FlowState()
 
     def page() -> Page:
         return pages[-1]
@@ -626,7 +678,7 @@ def _paginate(flow: list, has_experience_header: bool) -> list[Page]:
     def text_seg(y: float) -> Segment:
         seg = Segment("text", y)
         page().segments.append(seg)
-        state["text"] = seg
+        state.text = seg
         return seg
 
     def cursor() -> float:
@@ -638,13 +690,14 @@ def _paginate(flow: list, has_experience_header: bool) -> list[Page]:
             return last.y + SECTION_HEADER_HEIGHT
         return last.y + (box_height(last.paras, page().width) if last.paras else 0)
 
-    def new_page(suite: tuple[str, str] | None, continuation: Para | None) -> None:
+    def new_page(suite: tuple[str, str] | None, continuation: Para | None) -> Segment:
         pages.append(Page(LEFT_X, CONTINUATION_HEADER_Y, FULL_WIDTH))
         if suite:
             page().segments.append(Segment("header", page().top, title=f"{suite[0]} (suite)", source=suite[1]))
         seg = text_seg(cursor())
         if continuation is not None:
             seg.paras.append(continuation)
+        return seg
 
     if not has_experience_header:
         page().top = 6.93
@@ -662,17 +715,15 @@ def _paginate(flow: list, has_experience_header: bool) -> list[Page]:
             text_seg(cursor())
             continue
         block: Block = item
-        if state["text"] is None or state["text"] is not page().segments[-1]:
-            text_seg(cursor())
+        seg = state.text if state.text is not None and state.text is page().segments[-1] else text_seg(cursor())
         for index, unit in enumerate(_units(block.paras)):
-            seg = state["text"]
             trial = seg.paras + unit
             if seg.y + box_height(trial, page().width) <= CONTENT_BOTTOM or not seg.paras:
                 seg.paras.extend(unit)
                 continue
             continuation = block.continuation if index > 0 else None
-            new_page(section, continuation)
-            state["text"].paras.extend(unit)
+            seg = new_page(section, continuation)
+            seg.paras.extend(unit)
     for p in pages:
         p.segments = [s for s in p.segments if s.kind == "header" or s.paras]
     return pages
@@ -685,7 +736,7 @@ def _scale_block(block: Block, factor: float) -> Block:
     return Block(scale(block.paras, factor), continuation)
 
 
-def _split_experiences(cv: CV) -> tuple[list, list]:
+def _split_experiences(cv: CV) -> tuple[list[Experience], list[Experience]]:
     """Expériences professionnelles (antichronologiques) et bénévolat (relégué en fin de flux)."""
     experiences = contenu.sort_experiences(cv.experiences)
     return [e for e in experiences if e.type != "benevolat"], [e for e in experiences if e.type == "benevolat"]
@@ -697,10 +748,10 @@ def _build_flow(
     condensed: frozenset[int] = frozenset(),
     projects: str = "full",
     volunteering: bool = True,
-) -> tuple[list, bool]:
+) -> tuple[list[Block | Header], bool]:
     """Flux de la colonne gauche : expériences, projets, puis bénévolat. Rien d'autre ne crée de page."""
     pro, benevolat = _split_experiences(cv)
-    flow: list = [_scale_block(contenu.experience_block(exp, condensed=i in condensed), factor) for i, exp in enumerate(pro)]
+    flow: list[Block | Header] = [_scale_block(contenu.experience_block(exp, condensed=i in condensed), factor) for i, exp in enumerate(pro)]
     if cv.projets and projects != "none":
         flow.append(Header("Projets", "Expériences"))
         flow += [_scale_block(contenu.project_block(p, titles_only=projects == "titles"), factor) for p in cv.projets]
@@ -710,14 +761,28 @@ def _build_flow(
     return flow, bool(pro or benevolat)
 
 
-def _fit_left(cv: CV, limit: int | None, notes: list[str]) -> tuple[list[Page], bool]:
+NEARLY_EMPTY = 0.3  # dernière page remplie à moins de 30 % : on essaie de s'en passer
+
+
+def _page_fill(page: Page) -> float:
+    """Part de la hauteur utile occupée sur une page."""
+    if not page.segments:
+        return 0.0
+    last = page.segments[-1]
+    bottom = last.y + (SECTION_HEADER_HEIGHT if last.kind == "header" else box_height(last.paras, page.width))
+    return (bottom - page.top) / (CONTENT_BOTTOM - page.top)
+
+
+def _fit_left(cv: CV, limit: int | None, notes: list[str], fallback: bool = True) -> tuple[list[Page], bool]:
     """Pagination de la colonne gauche.
 
     - limite fixée (CV d'une page, ou --pages-max) : réduction jusqu'à 80 %, puis bénévolat retiré,
       projets condensés ou retirés, puis puces masquées en partant des expériences les plus
       anciennes (les 2 plus récentes restent complètes) ;
     - sans limite (CV source de plusieurs pages) : les pages de suite ne servent qu'aux expériences
-      professionnelles ; bénévolat et projets qui ajouteraient une page sont retirés ou condensés.
+      professionnelles ; bénévolat et projets qui ajouteraient une page sont retirés ou condensés ; une
+      dernière page presque vide est évitée en condensant comme pour un CV d'une page (cas des exports
+      LinkedIn, qui font plusieurs pages pour peu de contenu).
     Rien n'est réécrit : seuls des détails sont masqués, et le rapport le dit.
     """
     pro, benevolat = _split_experiences(cv)
@@ -748,6 +813,12 @@ def _fit_left(cv: CV, limit: int | None, notes: list[str]) -> tuple[list[Page], 
                 if len(pages) <= target:
                     break
             hidden.append("détail des projets" if mode == "titles" else "projets")
+        if len(pages) > 1 and _page_fill(pages[-1]) < NEARLY_EMPTY:
+            trial_notes: list[str] = []
+            trial = _fit_left(cv, len(pages) - 1, trial_notes, fallback=False)
+            if len(trial[0]) < len(pages):
+                notes.extend(trial_notes)
+                return trial
         if factor < 1.0:
             notes.append(f"Expériences réduites à {int(factor * 100)} % pour éviter une page presque vide")
     else:
@@ -755,7 +826,8 @@ def _fit_left(cv: CV, limit: int | None, notes: list[str]) -> tuple[list[Page], 
             pages = run(factor)
             if len(pages) <= limit:
                 break
-        mode, volunteering, condensed = "full", True, set()
+        mode, volunteering = "full", True
+        condensed: set[int] = set()
         if len(pages) > limit and benevolat:
             volunteering = False
             pages = run(factor, volunteering=False)
@@ -775,6 +847,8 @@ def _fit_left(cv: CV, limit: int | None, notes: list[str]) -> tuple[list[Page], 
                 if len(pages) <= limit:
                     break
         if len(pages) > limit:
+            if not fallback:  # essai pour éviter une page presque vide : sans succès, rien n'est masqué
+                return pages, has_exp
             # Même condensé, le CV ne tient pas : inutile de masquer quoi que ce soit, les expériences
             # continuent sur des pages de suite (cas des profils très expérimentés).
             notes.append(f"Trop d'expériences pour {limit} page(s) : pages de suite réservées aux expériences")
@@ -800,15 +874,17 @@ def _render_pages(t: Template, pages: list[Page], has_exp: bool) -> None:
         if index == 0:
             tree = t.tree
         else:
-            tree = t.prs.slides.add_slide(layout).shapes._spTree
+            tree = t.prs.slides.add_slide(layout).shapes.element
         used_template_box = False
         for seg in page.segments:
             if seg.kind == "header":
                 if index == 0 and has_exp and seg.title == "Expériences":
                     continue
                 source = header_sources.get(seg.source)
-                if source is None:
+                if source is None:  # jamais « a or b » sur un élément lxml : un élément sans enfant est « faux »
                     source = exp_header
+                if source is None:
+                    continue
                 group = t.clone(source, tree)
                 _retitle_header(group, seg.title)
                 set_geom(group, x=LEFT_X + 0.4 if page.x == LEFT_X else page.x, y=seg.y)
@@ -828,6 +904,16 @@ def _render_pages(t: Template, pages: list[Page], has_exp: bool) -> None:
 
 def used_template_box_on_first(pages: list[Page]) -> bool:
     return any(seg.kind == "text" for seg in pages[0].segments) if pages else False
+
+
+def _remove_unused_placeholders(t: Template, notes: list[str]) -> None:
+    """Zone encore marquée {{…}} (champ que l'outil ne remplit pas, ex. {{methode}} d'un ancien modèle) :
+    retirée plutôt que laissée telle quelle dans le CV."""
+    for el in [el for el in t.tree if el.tag in SHAPE_TAGS]:
+        names = re.findall(r"\{\{\s*(\w+)\s*\}+", text_of(el))
+        if names:
+            remove(el)
+            notes.append(f"Zone du modèle non utilisée retirée : {', '.join('{{' + n + '}}' for n in names)}")
 
 
 # --- Point d'entrée -----------------------------------------------------------------
@@ -872,6 +958,7 @@ def render_cv(
     limit = pages_max if pages_max else (1 if source_pages <= 1 else None)
     pages, has_exp = _fit_left(cv, limit, notes)
     _render_pages(t, pages, has_exp)
+    _remove_unused_placeholders(t, notes)
 
     props = prs.core_properties
     props.title = document_title or f"CV Logiclever - {name or display_name(cv)}"

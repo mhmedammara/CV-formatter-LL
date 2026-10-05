@@ -24,10 +24,10 @@ class CVReport:
     photo_rejected: bool = False
     experience: str = ""
     cross_check: str = ""
-    skipped_sections: list[str] = field(default_factory=list)
-    layout_notes: list[str] = field(default_factory=list)
-    findings: list[Finding] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
+    skipped_sections: list[str] = field(default_factory=list[str])
+    layout_notes: list[str] = field(default_factory=list[str])
+    findings: list[Finding] = field(default_factory=list[Finding])
+    warnings: list[str] = field(default_factory=list[str])
     error: str | None = None
 
     @property
@@ -82,7 +82,7 @@ def write_report(reports: list[CVReport], target: Path, settings: str) -> Path:
         for warning in r.warnings:
             lines.append(f"- ⚠️ {warning}")
         if r.removed:
-            lines += ["", "**Éléments retirés (non retrouvés dans le CV d'origine)**", ""]
+            lines += ["", "**Éléments retirés ou corrigés (non prouvés par le CV d'origine)**", ""]
             lines += [_line(f) for f in r.removed]
         if r.to_check:
             lines += ["", "**À vérifier**", ""]

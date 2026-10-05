@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 PP_SAVE_AS_PDF = 32
 PP_SAVE_AS_PPTX = 24
@@ -19,27 +20,33 @@ LIBREOFFICE_CANDIDATES = (
 )
 
 
-def _libreoffice() -> str | None:
+def libreoffice() -> str | None:
     for candidate in LIBREOFFICE_CANDIDATES:
         if Path(candidate).exists():
             return candidate
     return shutil.which("soffice") or shutil.which("libreoffice")
 
 
+def office_application(prog_id: str) -> Any:
+    """Application Office pilotée par COM (« PowerPoint.Application »…) : objet dynamique, donc typé Any."""
+    import win32com.client
+
+    return getattr(win32com.client, "DispatchEx")(prog_id)
+
+
 def _export_with_powerpoint(jobs: list[tuple[Path, Path]]) -> dict[Path, str]:
     import pythoncom
-    import win32com.client
 
     errors: dict[Path, str] = {}
     pythoncom.CoInitialize()
     try:
-        app = win32com.client.DispatchEx("PowerPoint.Application")
+        app = office_application("PowerPoint.Application")
         already_open = app.Presentations.Count > 0
         try:
             for pptx, pdf in jobs:
                 try:
                     presentation = app.Presentations.Open(str(pptx), MSO_TRUE, MSO_FALSE, MSO_FALSE)
-                    embedded = pptx.with_name(pptx.stem + ".~embed.pptx")
+                    embedded: Path | None = pptx.with_name(pptx.stem + ".~embed.pptx")
                     try:
                         presentation.SaveAs(str(pdf), PP_SAVE_AS_PDF)
                         # Ré-enregistrement par PowerPoint avec les polices Lexend complètes intégrées :
@@ -95,7 +102,7 @@ def export_pdfs(pptx_files: list[Path]) -> dict[Path, str]:
         except Exception as exc:  # PowerPoint absent ou COM indisponible
             errors = {pptx: f"PowerPoint indisponible : {exc}" for pptx, _ in jobs}
     remaining = [(pptx, pdf) for pptx, pdf in jobs if pptx in errors]
-    soffice = _libreoffice() if remaining else None
+    soffice = libreoffice() if remaining else None
     if soffice:
         lo_errors = _export_with_libreoffice(remaining, soffice)
         errors = {p: msg for p, msg in errors.items() if p in lo_errors}

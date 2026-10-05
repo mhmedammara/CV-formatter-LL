@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any, cast
 
 from .contenu import strip_accents
 from .schema import CV
@@ -13,7 +14,7 @@ PHONE_CANDIDATE = re.compile(r"(?:\(\s*\+?\d{1,3}\s*\)|\+)?[\d(][\d\s.\-()]{7,}\
 
 
 def initials(cv: CV) -> str:
-    parts = []
+    parts: list[str] = []
     for name in (cv.prenom, cv.nom):
         for word in (name or "").split():
             pieces = [seg for seg in word.split("-") if seg]
@@ -23,7 +24,7 @@ def initials(cv: CV) -> str:
 
 
 def _scrub_phones(text: str) -> str:
-    def replace(match: re.Match) -> str:
+    def replace(match: re.Match[str]) -> str:
         chunk = match.group(0)
         digits = re.sub(r"\D", "", chunk)
         looks_like_phone = chunk.lstrip("( ").startswith(("+", "0")) and 9 <= len(digits) <= 13
@@ -35,11 +36,11 @@ def _scrub_phones(text: str) -> str:
 def anonymize(cv: CV) -> CV:
     data = cv.model_dump()
     short = initials(cv)
-    names = []
+    names: list[str] = []
     if cv.prenom and cv.nom:
         names += [f"{cv.prenom} {cv.nom}", f"{cv.nom} {cv.prenom}"]
     names += [n for n in (cv.nom, cv.prenom) if n and len(n) >= 3]
-    patterns = []
+    patterns: list[re.Pattern[str]] = []
     for name in names:
         letters = [re.escape(c) if c.strip() else r"\s+" for c in name.strip()]
         patterns.append(re.compile(r"(?<!\w)" + "".join(letters) + r"(?!\w)", re.I))
@@ -55,13 +56,13 @@ def anonymize(cv: CV) -> CV:
             text = pattern.sub(short, text)
         return re.sub(r"\s{2,}", " ", text).strip(" |,;")
 
-    def walk(value):
+    def walk(value: Any) -> Any:  # données JSON du CV (model_dump) : chaînes, listes, dictionnaires
         if isinstance(value, str):
             return clean(value)
         if isinstance(value, list):
-            return [walk(v) for v in value]
+            return [walk(v) for v in cast(list[Any], value)]
         if isinstance(value, dict):
-            return {k: walk(v) for k, v in value.items()}
+            return {k: walk(v) for k, v in cast(dict[str, Any], value).items()}
         return value
 
     for key in list(data):

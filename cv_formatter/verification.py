@@ -2,6 +2,9 @@
 
 Chaque information extraite est confrontée au texte du CV d'origine :
 - tout nombre, date, sigle, nom propre ou outil doit figurer dans le CV ;
+- l'employeur et le client d'une expérience doivent figurer ailleurs que dans l'en-tête du CV (nom,
+  titre), les coordonnées ou les pieds de page : un CV mis en forme par une ESN ne fait pas de cette
+  ESN l'employeur des expériences listées ;
 - e-mail, téléphone et LinkedIn doivent y être visibles ;
 - pour un CV en français, une formulation trop éloignée du texte d'origine est signalée.
 Un élément introuvable est retiré (ou seulement signalé si le texte de référence est
@@ -15,7 +18,11 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
-from .schema import CV
+from .contenu import months_in_text, parse_period
+from .pdf_source import LinkedInRole
+from .schema import CV, CategorieCompetences, Certification, Experience, Formation, Langue, Projet
+
+FieldPath = tuple[str | int, ...]  # emplacement d'un champ dans le CV, ex. ("experiences", 0, "realisations", 2)
 
 STOPWORDS = set(
     """
@@ -94,7 +101,7 @@ class Reference:
 
 @dataclass
 class Finding:
-    path: tuple
+    path: FieldPath
     label: str
     text: str
     reason: str
@@ -103,11 +110,76 @@ class Finding:
 
 @dataclass
 class TextCheck:
-    missing: list[str] = field(default_factory=list)  # éléments introuvables (bloquants)
+    missing: list[str] = field(default_factory=list[str])  # éléments introuvables (bloquants)
     overlap: float | None = None
 
 
 _WORD = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9][\wÀ-ÖØ-öø-ÿ'’.+#&/-]*")
+
+
+def _ground(word: str, ref: Reference, missing: list[str]) -> None:
+    """Ajoute à `missing` les parties du mot introuvables dans le CV."""
+    for tok in tokens(word):
+        # « 3ème » / « 3ième », « v8 » : on contrôle séparément la partie chiffrée et la partie lettres.
+        parts = re.findall(r"[a-z]+|[0-9]+", tok) if any(c.isdigit() for c in tok) and not tok.isdigit() else [tok]
+        if ref.has(tok):
+            continue
+        for part in parts:
+            if part.isalpha() and len(part) <= 4 and len(parts) > 1:
+                continue  # suffixe court (ème, x, v…) : seule la partie chiffrée compte
+            if not ref.has(part) and tok not in missing:
+                missing.append(tok)
+
+
+def check_name(text: str, ref: Reference) -> list[str]:
+    """Nom d'organisation : chaque mot portant une majuscule ou un chiffre doit figurer dans le CV, y
+    compris le premier mot et quelle que soit la langue du CV (un nom propre ne se traduit pas)."""
+    missing: list[str] = []
+    for match in _WORD.finditer(text or ""):
+        word = match.group(0).strip(".'’-/")
+        if word and any(c.isupper() or c.isdigit() for c in word):
+            _ground(word, ref, missing)
+    return missing
+
+
+FREELANCE = re.compile(r"free[\s-]?lance|independant|independent|auto[\s-]?entrepreneur|micro[\s-]?entrepreneur|self[\s-]?employed|portage")
+
+
+_PRESENT = re.compile(r"present|aujourd|today|now|en cours|actuel")
+
+
+def _bound(part: str) -> str | None:
+    if _PRESENT.search(part):
+        return "present"
+    year = re.search(r"(?:19|20)\d{2}", part)
+    if not year:
+        return None
+    months = months_in_text(part)
+    return f"{year.group(0)}-{months[0]:02d}" if months else year.group(0)
+
+
+def role_bounds(dates: str) -> tuple[str | None, str | None]:
+    """« février 2015 - septembre 2015 (8 mois) » -> ("2015-02", "2015-09") ; « … - Present » -> (…, "present")."""
+    parts = [p for p in re.split(r"\s[-–]\s|\sa\s", re.sub(r"\(.*?\)", " ", norm(dates))) if p.strip()]
+    bounds = [_bound(p) for p in parts]
+    return (bounds[0] if bounds else None, bounds[-1] if len(bounds) > 1 else None)
+
+
+def _same_org(a: str, b: str) -> bool:
+    a, b = re.sub(r"[^a-z0-9]", "", norm(a)), re.sub(r"[^a-z0-9]", "", norm(b))
+    return bool(a and b) and (a == b or a in b or b in a)
+
+
+def match_linkedin_role(exp: Experience, roles: list[LinkedInRole]) -> LinkedInRole | None:
+    """Poste LinkedIn correspondant à une expérience extraite : mêmes dates, sinon même intitulé."""
+    if exp.debut:
+        for role in roles:
+            if role_bounds(role.dates) == (exp.debut, exp.fin):
+                return role
+    for role in roles:
+        if exp.poste and norm(exp.poste) == norm(role.title):
+            return role
+    return None
 
 
 def check_text(text: str, ref: Reference, french_source: bool) -> TextCheck:
@@ -127,16 +199,7 @@ def check_text(text: str, ref: Reference, french_source: bool) -> TextCheck:
         proper = word[:1].isupper() and not sentence_start and french_source
         if not (has_digit or acronym or camel or proper):
             continue
-        for tok in tokens(word):
-            # « 3ème » / « 3ième », « v8 » : on contrôle séparément la partie chiffrée et la partie lettres.
-            parts = re.findall(r"[a-z]+|[0-9]+", tok) if any(c.isdigit() for c in tok) and not tok.isdigit() else [tok]
-            if ref.has(tok):
-                continue
-            for part in parts:
-                if part.isalpha() and len(part) <= 4 and len(parts) > 1:
-                    continue  # suffixe court (ème, x, v…) : seule la partie chiffrée compte
-                if not ref.has(part) and tok not in result.missing:
-                    result.missing.append(tok)
+        _ground(word, ref, result.missing)
     if french_source:
         content = [t for t in tokens(text) if len(t) >= 4 and t not in STOPWORDS and not t.isdigit()]
         if len(content) >= 3:
@@ -145,33 +208,45 @@ def check_text(text: str, ref: Reference, french_source: bool) -> TextCheck:
 
 
 class Verifier:
-    def __init__(self, cv: CV, reference_text: str, links: list[str], apply_removals: bool):
+    def __init__(
+        self,
+        cv: CV,
+        reference_text: str,
+        links: list[str],
+        apply_removals: bool,
+        body_text: str | None = None,
+        linkedin: list[LinkedInRole] | None = None,
+    ):
         self.cv = cv
+        self.linkedin = linkedin or []
         self.ref = Reference.build(reference_text, links)
+        # Texte du CV hors en-tête (nom, titre), coordonnées et pieds de page répétés (cf. SourceDocument.body_text).
+        self.body = Reference.build(body_text, []) if body_text else None
         self.french = (cv.langue_source or "fr").lower().startswith("fr")
         self.apply = apply_removals
         self.findings: list[Finding] = []
 
     # -- utilitaires --
-    def _flag(self, path: tuple, label: str, text: str, reason: str, removable: bool = True) -> bool:
+    def _flag(self, path: FieldPath, label: str, text: str, reason: str, removable: bool = True) -> bool:
         """Enregistre un constat ; renvoie True si l'élément doit être retiré."""
         remove = removable and self.apply
         self.findings.append(Finding(path, label, text, reason, "retiré" if remove else "à vérifier"))
         return remove
 
-    def _check(self, path: tuple, label: str, text: str | None, removable: bool = True) -> bool:
-        """Contrôle un texte ; renvoie True s'il faut le retirer."""
+    def _check(self, path: FieldPath, label: str, text: str | None, removable: bool = True, wording: bool = True) -> bool:
+        """Contrôle un texte ; renvoie True s'il faut le retirer. `wording=False` : pas d'alerte sur une
+        formulation éloignée (ex. niveau de langue traduit : « Native or Bilingual » → « Bilingue »)."""
         if not text:
             return False
         result = check_text(text, self.ref, self.french)
         if result.missing:
             return self._flag(path, label, text, "introuvable dans le CV : " + ", ".join(result.missing), removable)
-        if result.overlap is not None and result.overlap < 0.6:
+        if wording and result.overlap is not None and result.overlap < 0.6:
             self._flag(path, label, text, f"formulation éloignée du CV ({int(result.overlap * 100)} % des mots retrouvés)", False)
         return False
 
-    def _filter_list(self, items: list[str], path: tuple, label: str) -> list[str]:
-        kept = []
+    def _filter_list(self, items: list[str], path: FieldPath, label: str) -> list[str]:
+        kept: list[str] = []
         for i, item in enumerate(items):
             if not self._check(path + (i,), f"{label} : {item}", item):
                 kept.append(item)
@@ -180,7 +255,8 @@ class Verifier:
     # -- contrôles par rubrique --
     def _contact(self) -> None:
         c = self.cv.contact
-        if c.email and norm(c.email.strip()) not in self.ref.flat:
+        # Comparaison sans espaces ni ponctuation : un e-mail coupé en fin de ligne (export LinkedIn) reste visible.
+        if c.email and re.sub(r"[^a-z0-9]", "", norm(c.email)) not in self.ref.compact:
             if self._flag(("contact", "email"), "E-mail", c.email, "absent du texte visible du CV"):
                 c.email = None
         if c.telephone:
@@ -213,18 +289,71 @@ class Verifier:
             if self._flag(("annees_experience",), "Années d'expérience", f"{a.valeur} (« {a.citation} »)", "mention introuvable dans le CV"):
                 a.valeur, a.citation = None, None
 
-    def _experiences(self) -> None:
-        kept = []
+    def _organisation_problem(self, value: str) -> str | None:
+        missing = check_name(value, self.ref)
+        if missing:
+            return "introuvable dans le CV : " + ", ".join(missing)
+        if self.body is not None and check_name(value, self.body):
+            return "nommé seulement dans l'en-tête du CV (nom, titre), les coordonnées ou le pied de page, pas dans une expérience"
+        return None
+
+    def _organisations(self, exp: Experience, base: FieldPath, name: str) -> None:
+        """Le client est contrôlé d'abord : s'il est prouvé et que l'employeur ne l'est pas (ex. l'ESN qui a
+        mis le CV en forme, citée seulement dans le titre), le client devient l'entreprise affichée."""
+        if exp.client:
+            why = self._organisation_problem(exp.client)
+            if why and self._flag(base + ("client",), f"{name} — Client", exp.client, why):
+                exp.client = None
+        if exp.entreprise:
+            why = self._organisation_problem(exp.entreprise)
+            if why:
+                promote = exp.client
+                reason = why + (f" — employeur retiré ; « {promote} » affiché comme entreprise" if promote else "")
+                if self._flag(base + ("entreprise",), f"{name} — Entreprise", exp.entreprise, reason):
+                    exp.entreprise, exp.client = (promote, None) if promote else (None, exp.client)
+
+    def _linkedin_employers(self) -> None:
+        """Export LinkedIn : chaque poste a pour employeur l'entreprise sous laquelle LinkedIn le liste (structure
+        lue dans le PDF). Une organisation seulement citée dans la description du poste devient le client."""
         for i, exp in enumerate(self.cv.experiences):
-            name = " — ".join(x for x in (exp.poste, exp.entreprise) if x) or f"expérience {i + 1}"
+            role = match_linkedin_role(exp, self.linkedin)
+            if role is None or not role.company or FREELANCE.search(norm(role.company)):
+                continue
+            if exp.entreprise and _same_org(exp.entreprise, role.company):
+                continue
+            old = exp.entreprise
+            cited = bool(old) and not exp.client and norm(old) in norm(role.text)
+            name = " — ".join(x for x in (exp.poste, old or exp.client) if x) or f"expérience {i + 1}"
+            reason = f"export LinkedIn : poste listé sous « {role.company} », employeur corrigé"
+            if cited:
+                reason += f" ; « {old} », cité dans la description du poste, affiché comme client"
+            if self._flag(("experiences", i, "entreprise"), f"{name} — Entreprise", old or "(aucune)", reason):
+                if cited:
+                    exp.client = old
+                if exp.client and _same_org(exp.client, role.company):
+                    exp.client = None
+                exp.entreprise = role.company
+
+    def _experiences(self) -> None:
+        kept: list[Experience] = []
+        freelance_in_cv = bool(FREELANCE.search(self.ref.flat))
+        for i, exp in enumerate(self.cv.experiences):
+            name = " — ".join(x for x in (exp.poste, exp.entreprise or exp.client) if x) or f"expérience {i + 1}"
             base = ("experiences", i)
-            for attr, label in (("poste", "Poste"), ("entreprise", "Entreprise"), ("client", "Client"), ("lieu", "Lieu"), ("contexte", "Contexte")):
+            self._organisations(exp, base, name)
+            for attr, label in (("poste", "Poste"), ("lieu", "Lieu"), ("contexte", "Contexte")):
                 value = getattr(exp, attr)
                 if self._check(base + (attr,), f"{name} — {label}", value):
                     setattr(exp, attr, None)
+            if exp.type == "freelance" and not freelance_in_cv:  # mention « Freelance » affichée : elle doit être écrite
+                if self._flag(base + ("type",), f"{name} — Freelance", "Freelance", "le CV ne mentionne aucune activité en freelance / indépendant — mention retirée"):
+                    exp.type = "emploi"
             if exp.periode_texte:
                 if self._check(base + ("periode_texte",), f"{name} — Période", exp.periode_texte):
                     exp.periode_texte, exp.debut, exp.fin = None, None, None
+            start, end = parse_period(exp.periode_texte)
+            if start:  # dates lues par le code dans la période écrite : elles priment sur la normalisation du modèle
+                exp.debut, exp.fin = start, end
             years = set(re.findall(r"(?:19|20)\d{2}", exp.periode_texte or ""))
             for attr in ("debut", "fin"):
                 value = getattr(exp, attr)
@@ -232,13 +361,13 @@ class Verifier:
                     self._flag(base + (attr,), f"{name} — Date", value, "date absente de la période écrite", False)
                     setattr(exp, attr, None)
             exp.realisations = self._filter_list(exp.realisations, base + ("realisations",), f"{name} — Réalisation")
-            exp.environnement = self._filter_list(exp.environnement, base + ("environnement",), f"{name} — Environnement")
+            # L'environnement d'une expérience n'est pas affiché : rien à contrôler.
             if exp.poste or exp.entreprise or exp.client or exp.realisations:
                 kept.append(exp)
         self.cv.experiences = kept
 
     def _projets(self) -> None:
-        kept = []
+        kept: list[Projet] = []
         for i, prj in enumerate(self.cv.projets):
             base = ("projets", i)
             if self._check(base + ("nom",), f"Projet : {prj.nom}", prj.nom):
@@ -248,12 +377,11 @@ class Verifier:
             if self._check(base + ("periode_texte",), f"Projet {prj.nom} — Période", prj.periode_texte):
                 prj.periode_texte = None
             prj.description = self._filter_list(prj.description, base + ("description",), f"Projet {prj.nom}")
-            prj.environnement = self._filter_list(prj.environnement, base + ("environnement",), f"Projet {prj.nom} — Environnement")
             kept.append(prj)
         self.cv.projets = kept
 
     def _objects(self) -> None:
-        certifs = []
+        certifs: list[Certification] = []
         for i, cert in enumerate(self.cv.certifications):
             base = ("certifications", i)
             if self._check(base + ("intitule",), f"Certification : {cert.intitule}", cert.intitule):
@@ -264,7 +392,7 @@ class Verifier:
             certifs.append(cert)
         self.cv.certifications = certifs
 
-        formations = []
+        formations: list[Formation] = []
         for i, form in enumerate(self.cv.formations):
             base = ("formations", i)
             if self._check(base + ("diplome",), f"Formation : {form.diplome}", form.diplome):
@@ -275,17 +403,17 @@ class Verifier:
             formations.append(form)
         self.cv.formations = formations
 
-        langues = []
+        langues: list[Langue] = []
         for i, lang in enumerate(self.cv.langues):
             base = ("langues", i)
             if self.french and self._check(base + ("langue",), f"Langue : {lang.langue}", lang.langue):
                 continue
-            if self._check(base + ("niveau",), f"Langue {lang.langue} — niveau", lang.niveau):
+            if self._check(base + ("niveau",), f"Langue {lang.langue} — niveau", lang.niveau, wording=False):
                 lang.niveau = None
             langues.append(lang)
         self.cv.langues = langues
 
-        cats = []
+        cats: list[CategorieCompetences] = []
         for i, cat in enumerate(self.cv.competences_detaillees):
             base = ("competences_detaillees", i)
             cat.elements = self._filter_list(cat.elements, base + ("elements",), f"Compétences « {cat.categorie} »")
@@ -302,16 +430,26 @@ class Verifier:
         self._contact()
         self._annees()
         cv.expertise = self._filter_list(cv.expertise, ("expertise",), "Expertise")
-        cv.methodes = self._filter_list(cv.methodes, ("methodes",), "Méthode")
         cv.outils_si = self._filter_list(cv.outils_si, ("outils_si",), "Outil SI")
         self._objects()
+        self._linkedin_employers()
         self._experiences()
         self._projets()
         return self.findings
 
 
-def verify(cv: CV, reference_text: str, links: list[str], apply_removals: bool) -> tuple[CV, list[Finding]]:
-    """Renvoie une copie du CV nettoyée et la liste des constats."""
+def verify(
+    cv: CV,
+    reference_text: str,
+    links: list[str],
+    apply_removals: bool,
+    body_text: str | None = None,
+    linkedin: list[LinkedInRole] | None = None,
+) -> tuple[CV, list[Finding]]:
+    """Renvoie une copie du CV nettoyée et la liste des constats.
+
+    `body_text` : texte du CV hors en-tête, coordonnées et pieds de page ; s'il est fourni, l'employeur et
+    le client de chaque expérience doivent y figurer. `linkedin` : postes lus dans un export LinkedIn."""
     checked = cv.model_copy(deep=True)
-    findings = Verifier(checked, reference_text, links, apply_removals).run()
+    findings = Verifier(checked, reference_text, links, apply_removals, body_text, linkedin).run()
     return checked, findings

@@ -57,9 +57,20 @@ class Formation(BaseModel):
 
 class Experience(BaseModel):
     poste: Optional[str] = Field(description="Intitulé du poste ou du rôle tel qu'écrit, sinon null.")
-    entreprise: Optional[str] = Field(description="Employeur (ou société de conseil / ESN) tel qu'écrit, sinon null.")
+    entreprise: Optional[str] = Field(
+        description=(
+            "Organisation nommée dans le bloc de CETTE expérience (employeur, société, ESN) ou dans le titre de "
+            "rubrique qui regroupe plusieurs missions, telle qu'écrite. Jamais une entreprise citée seulement dans "
+            "l'en-tête du CV, le titre du consultant, le logo, les coordonnées, l'e-mail ou le pied de page. "
+            "null si le bloc n'en nomme aucune (ou pour un freelance, cf. client)."
+        )
+    )
     client: Optional[str] = Field(
-        description="Client final si le CV en mentionne un distinct de l'employeur (ex. « mission à la Société Générale »), sinon null."
+        description=(
+            "Client final, seulement si le CV le distingue explicitement de l'employeur pour cette expérience "
+            "(A employeur, B client : « A (Client : B) », « mission chez B », « B (via A) », ligne « B » sous "
+            "« A - poste »). Freelance : l'entreprise pour laquelle la mission a été faite. Sinon null."
+        )
     )
     lieu: Optional[str] = Field(description="Ville / pays de l'expérience s'ils sont écrits, sinon null.")
     periode_texte: Optional[str] = Field(description="Période exactement comme dans le CV (ex. « Juin 2022 – Présent »), sinon null.")
@@ -73,8 +84,9 @@ class Experience(BaseModel):
         description=(
             "Nature de l'expérience d'après le CV : alternance = alternance, apprentissage, contrat de "
             "professionnalisation (même si le mot n'apparaît que près des dates) ; stage = stage, internship, PFE ; "
-            "emploi = poste salarié ; mission = mission chez un client pour une ESN/société de conseil ; "
-            "freelance = indépendant ; creation_entreprise = fondateur / cofondateur ; benevolat ; "
+            "emploi = poste salarié ; mission = mission chez un client pour le compte d'un employeur (ESN, cabinet) "
+            "nommé dans le CV ; freelance = le CV écrit freelance, indépendant, auto-entrepreneur ou portage ; "
+            "creation_entreprise = fondateur / cofondateur ; benevolat ; "
             "autre = tutorat, job étudiant, associatif. En cas de doute entre alternance/stage et emploi, "
             "choisir alternance ou stage."
         )
@@ -86,7 +98,11 @@ class Experience(BaseModel):
         description="Chaque puce / tâche / réalisation reprise mot pour mot, une entrée par puce, dans l'ordre du CV."
     )
     environnement: list[str] = Field(
-        description="Outils, technologies, logiciels cités pour CETTE expérience (une entrée par élément), sinon liste vide."
+        description=(
+            "Outils ou technologies listés pour CETTE expérience (ligne « Environnement », « Env. technique », "
+            "« Tech. »…), un par entrée, sinon liste vide. Non affichés sur le CV Logiclever : les ranger ici évite "
+            "de les mêler aux réalisations."
+        )
     )
 
 
@@ -95,7 +111,7 @@ class Projet(BaseModel):
     cadre: Optional[str] = Field(description="Cadre du projet tel qu'écrit (ex. « Projet personnel », nom d'entreprise), sinon null.")
     periode_texte: Optional[str] = Field(description="Période telle qu'écrite, sinon null.")
     description: list[str] = Field(description="Lignes de description reprises mot pour mot.")
-    environnement: list[str] = Field(description="Technologies citées pour ce projet, sinon liste vide.")
+    environnement: list[str] = Field(description="Technologies listées pour ce projet (non affichées), sinon liste vide.")
 
 
 class CategorieCompetences(BaseModel):
@@ -115,11 +131,13 @@ class CV(BaseModel):
     expertise: list[str] = Field(
         description="Jusqu'à 8 domaines d'expertise (métier, fonctionnels ou techniques) formulés avec des termes présents dans le CV. Liste vide si rien d'explicite."
     )
-    methodes: list[str] = Field(
-        description="Méthodologies et référentiels explicitement cités dans le CV (ex. Scrum, SAFe, Cycle en V, ITIL, ISO 21500). Liste vide sinon."
-    )
     outils_si: list[str] = Field(
-        description="Jusqu'à 15 outils, logiciels, ERP, plateformes ou technologies principaux cités dans le CV (les plus représentatifs)."
+        description=(
+            "Jusqu'à 15 outils et technologies que le CV présente comme utilisés ou maîtrisés : logiciels, ERP, "
+            "plateformes, langages, bases de données, frameworks, outils de gestion (ex. Jira) — les plus "
+            "représentatifs. Pas de méthodologies (Agile, Scrum, SAFe, cycle en V…), ni de normes ou "
+            "réglementations, ni de connaissances métier. Liste vide si le CV n'en cite pas."
+        )
     )
     competences_detaillees: list[CategorieCompetences] = Field(
         description="Liste complète des compétences techniques par catégorie, UNIQUEMENT si le CV contient une section de compétences catégorisée ; sinon liste vide."

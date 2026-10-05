@@ -52,7 +52,7 @@ class Para:
 class Block:
     """Groupe de paragraphes paginé ensemble (ex. une expérience)."""
 
-    paras: list[Para] = field(default_factory=list)
+    paras: list[Para] = field(default_factory=list[Para])
     continuation: Para | None = None  # en-tête répété si le bloc est coupé entre deux pages
 
 
@@ -149,7 +149,7 @@ def fits_one_line(text: str, style: str, size: float, width_cm: float) -> bool:
 
 def scale(paras: list[Para], factor: float) -> list[Para]:
     """Copie des paragraphes avec toutes les tailles multipliées par `factor`."""
-    scaled = []
+    scaled: list[Para] = []
     for para in paras:
         runs = [Run(r.text, r.style, round(r.size * factor * 2) / 2, r.color) for r in para.runs]
         scaled.append(

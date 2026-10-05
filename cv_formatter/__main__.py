@@ -12,19 +12,25 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from . import __version__, contenu, fonts
 from .anonymisation import anonymize, initials
-from .config import DATA_DIR, DEFAULT_EFFORT, DEFAULT_MODEL, DEFAULT_OUTPUT_DIR, EFFORT_CHOICES, PROJECT_ROOT, TEMPLATE_PATH
-from .controle import CONTROLE_VERSION, apply_verdicts, fingerprint, photo_verdict, run_cross_check, verdicts_from_json, verdicts_to_json
+from .config import DATA_DIR, DEFAULT_EFFORT, DEFAULT_MODEL, DEFAULT_OUTPUT_DIR, EFFORT_CHOICES, INPUT_DIR, TEMPLATE_PATH
+from .controle import CONTROLE_VERSION, apply_verdicts, fingerprint, fingerprint_data, photo_verdict, run_cross_check, verdicts_from_json, verdicts_to_json
 from .export_pdf import export_pdfs
-from .extraction import api_key_available, extract_cv, make_client
+from .extraction import EXTRACTION_VERSION, api_key_available, extract_cv, make_client
 from .pdf_source import SUPPORTED_SUFFIXES, SourceDocument, load_source, save_photo, square_photo
 from .rapport import CVReport, write_report
 from .render_pptx import display_name, render_cv
 from .schema import CV
-from .verification import verify
+from .verification import Finding, verify
 from .visage import FaceCheck, check_face
+
+if TYPE_CHECKING:
+    from openai import OpenAI
+
+Stored = dict[str, Any]  # contenu d'un fichier sortie/_donnees/*.json (_meta, cv, controle)
 
 
 @dataclass
@@ -33,10 +39,10 @@ class Job:
     report: CVReport
     data_file: Path
     source: SourceDocument | None = None
-    stored: dict | None = None
+    stored: Stored | None = None
     cv: CV | None = None
     pptx: Path | None = None
-    stats: dict = field(default_factory=dict)
+    stats: dict[str, int | None] = field(default_factory=dict[str, int | None])
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -44,7 +50,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="python -m cv_formatter",
         description="Met des CV (PDF, Word, images) au format Logiclever (PPTX + PDF), sans rien inventer.",
     )
-    parser.add_argument("entrees", nargs="*", type=Path, help="Dossiers, fichiers ou .zip (défaut : dernier dossier drive-download-*)")
+    parser.add_argument("entrees", nargs="*", type=Path, help="Dossiers, fichiers ou .zip (défaut : le dossier Input du projet)")
     parser.add_argument("--sortie", type=Path, default=DEFAULT_OUTPUT_DIR, help="Dossier de sortie (défaut : ./sortie)")
     parser.add_argument("--anonymiser", action="store_true", help="CV anonyme : initiales, ni photo, ni e-mail, ni téléphone, ni LinkedIn")
     parser.add_argument("--sans-coordonnees", action="store_true", help="Retire e-mail, téléphone, localisation et LinkedIn (nom et photo conservés)")
@@ -61,12 +67,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def default_input() -> Path | None:
-    candidates = [p for p in PROJECT_ROOT.glob("drive-download-*") if p.is_dir() or p.suffix.lower() == ".zip"]
-    entree = PROJECT_ROOT / "entree"
-    if not candidates and entree.is_dir():
-        return entree
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+def default_input() -> Path:
+    """Dossier d'entrée par défaut : Input, à la racine du projet (créé s'il n'existe pas)."""
+    INPUT_DIR.mkdir(exist_ok=True)
+    return INPUT_DIR
+
+
+def _unzip(archive_path: Path, output: Path) -> list[Path]:
+    target = output / "_entree_zip" / archive_path.stem
+    with zipfile.ZipFile(archive_path) as archive:
+        archive.extractall(target)
+    return sorted(p for p in target.rglob("*") if p.suffix.lower() in SUPPORTED_SUFFIXES and not p.name.startswith("~$"))
 
 
 def collect_files(inputs: list[Path], output: Path) -> list[Path]:
@@ -74,16 +85,16 @@ def collect_files(inputs: list[Path], output: Path) -> list[Path]:
     for item in inputs:
         if item.is_dir():
             files += sorted(p for p in item.rglob("*") if p.suffix.lower() in SUPPORTED_SUFFIXES and not p.name.startswith("~$"))
+            for archive in sorted(item.rglob("*.zip")):  # export Google Drive déposé tel quel
+                files += _unzip(archive, output)
         elif item.suffix.lower() == ".zip" and item.exists():
-            target = output / "_entree_zip" / item.stem
-            with zipfile.ZipFile(item) as archive:
-                archive.extractall(target)
-            files += sorted(p for p in target.rglob("*") if p.suffix.lower() in SUPPORTED_SUFFIXES)
+            files += _unzip(item, output)
         elif item.exists() and item.suffix.lower() in SUPPORTED_SUFFIXES:
             files.append(item)
         else:
             print(f"  ! Ignoré (introuvable ou format non pris en charge) : {item}")
-    seen, unique = set(), []
+    seen: set[Path] = set()
+    unique: list[Path] = []
     for f in files:
         key = f.resolve()
         if key not in seen:
@@ -100,11 +111,34 @@ def safe_name(text: str) -> str:
 def load_stored(job: Job) -> None:
     if job.data_file.exists():
         try:
-            job.stored = json.loads(job.data_file.read_text(encoding="utf-8"))
-            job.cv = CV.model_validate(job.stored["cv"])
+            stored: Stored = json.loads(job.data_file.read_text(encoding="utf-8"))
+            job.stored, job.cv = stored, CV.model_validate(stored["cv"])
         except Exception as exc:
             job.report.warnings.append(f"JSON existant illisible, ignoré ({exc})")
             job.stored, job.cv = None, None
+
+
+def json_edited(stored: Stored | None) -> bool:
+    """Le JSON enregistré a-t-il été modifié à la main depuis l'extraction ?"""
+    if not stored:
+        return False
+    meta: dict[str, Any] = stored.get("_meta", {})
+    return meta.get("empreinte") not in (None, fingerprint_data(stored.get("cv", {})))
+
+
+def needs_extraction(job: "Job", forcer: bool, depuis_json: bool) -> bool:
+    """Extraction à (re)faire : CV nouveau ou modifié, --forcer, ou extraction faite avec une consigne
+    antérieure (sauf JSON corrigé à la main, dont les corrections priment)."""
+    if job.report.error:
+        return False
+    if depuis_json:
+        return job.cv is None
+    if forcer or job.cv is None or job.stored is None or job.source is None:
+        return True
+    meta: dict[str, Any] = job.stored.get("_meta", {})
+    if meta.get("sha256") != job.source.sha256:
+        return True
+    return meta.get("version_extraction") != EXTRACTION_VERSION and not json_edited(job.stored)
 
 
 def photo_decision(local: FaceCheck, llm_ok: bool | None, llm_why: str, edited: bool) -> tuple[bool, str | None]:
@@ -128,10 +162,12 @@ def photo_decision(local: FaceCheck, llm_ok: bool | None, llm_why: str, edited: 
     return False, f"photo retirée ({reason}) — voir la vignette dans le rapport"
 
 
-def cached_controle(job: Job) -> dict | None:
+def cached_controle(job: Job) -> dict[str, Any] | None:
     """Contre-vérification enregistrée, si elle porte sur ces données et la version courante des contrôles."""
-    cached = (job.stored or {}).get("controle")
-    if cached and cached.get("version") == CONTROLE_VERSION and cached.get("empreinte") == fingerprint(job.cv):
+    if job.stored is None:
+        return None
+    cached: dict[str, Any] | None = job.stored.get("controle")
+    if cached and cached.get("version") == CONTROLE_VERSION and cached.get("empreinte") == fingerprint_data(job.stored.get("cv", {})):
         return cached
     return None
 
@@ -142,10 +178,9 @@ def save_stored(job: Job) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+    reconfigure = getattr(sys.stdout, "reconfigure", None)  # absent si la sortie est redirigée vers un objet quelconque
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="replace")
     output: Path = args.sortie.resolve()
     output.mkdir(parents=True, exist_ok=True)
     data_dir = DATA_DIR
@@ -154,13 +189,12 @@ def run(args: argparse.Namespace) -> int:
         print(f"Modèle introuvable : {template}")
         return 2
 
-    inputs = args.entrees or ([default_input()] if default_input() else [])
-    if not inputs:
-        print("Aucun CV à traiter : indiquez un dossier, ou placez un dossier drive-download-* à la racine du projet.")
-        return 2
+    inputs = args.entrees or [default_input()]
     files = collect_files(inputs, output)
     if not files:
-        print("Aucun CV (PDF, DOCX, image) trouvé dans :", ", ".join(str(i) for i in inputs))
+        print("Aucun CV (PDF, DOCX, image ou .zip) trouvé dans :", ", ".join(str(i) for i in inputs))
+        if not args.entrees:
+            print(f"Déposez les CV à traiter dans le dossier {INPUT_DIR} puis relancez.")
         return 2
 
     print(f"CV Formatter Logiclever {__version__} — {len(files)} CV à traiter")
@@ -172,7 +206,7 @@ def run(args: argparse.Namespace) -> int:
 
     jobs = [Job(f, CVReport(source=f.name), data_dir / f"{f.stem}.json") for f in files]
     has_key = api_key_available()
-    client = None
+    client: OpenAI | None = None
 
     # 1. Lecture des sources (séquentiel : PyMuPDF n'est pas multi-thread).
     for job in jobs:
@@ -183,6 +217,13 @@ def run(args: argparse.Namespace) -> int:
             job.report.error = f"lecture impossible : {exc}"
             continue
         load_stored(job)
+        meta: dict[str, Any] = (job.stored or {}).get("_meta", {})
+        if job.cv is not None and meta.get("version_extraction") != EXTRACTION_VERSION and (args.depuis_json or json_edited(job.stored)):
+            job.report.warnings.append(
+                "Extraction faite avec une version antérieure des consignes"
+                + (" et corrigée à la main" if json_edited(job.stored) else "")
+                + " : relancer avec --forcer pour appliquer les dernières règles (les corrections manuelles seraient perdues)."
+            )
         if job.source.ocr_pages:
             job.report.warnings.append(
                 f"Pages {job.source.ocr_pages} scannées, lues par {job.source.ocr_engine or 'aucun moteur OCR'} : "
@@ -190,16 +231,7 @@ def run(args: argparse.Namespace) -> int:
             )
 
     # 2. Extraction (appels API en parallèle).
-    def needs_extraction(job: Job) -> bool:
-        if job.report.error:
-            return False
-        if args.depuis_json:
-            return job.cv is None
-        if args.forcer or job.cv is None:
-            return True
-        return job.stored.get("_meta", {}).get("sha256") != job.source.sha256
-
-    to_extract = [j for j in jobs if needs_extraction(j)]
+    to_extract = [j for j in jobs if needs_extraction(j, args.forcer, args.depuis_json)]
     if to_extract and (args.depuis_json or not has_key):
         for job in to_extract:
             job.report.error = (
@@ -208,12 +240,15 @@ def run(args: argparse.Namespace) -> int:
             )
         to_extract = []
     if to_extract:
-        client = make_client()
+        client = api = make_client()
         print(f"  Extraction de {len(to_extract)} CV avec {args.modele} (effort {args.effort})…")
 
         def extract(job: Job) -> None:
+            source = job.source
+            if source is None:
+                return
             try:
-                cv, stats = extract_cv(client, job.source, args.modele, args.effort)
+                cv, stats = extract_cv(api, source, args.modele, args.effort)
             except Exception as exc:
                 job.report.error = f"extraction impossible : {exc}"
                 return
@@ -222,9 +257,10 @@ def run(args: argparse.Namespace) -> int:
             job.stored = {
                 "_meta": {
                     "source": job.path.name,
-                    "sha256": job.source.sha256,
+                    "sha256": source.sha256,
                     "extracteur": args.modele,
                     "effort": args.effort,
+                    "version_extraction": EXTRACTION_VERSION,
                     "date": dt.datetime.now().isoformat(timespec="seconds"),
                     "empreinte": fingerprint(cv),
                     "outil": f"cv_formatter {__version__}",
@@ -240,25 +276,27 @@ def run(args: argparse.Namespace) -> int:
     # 3. Contre-vérification (second appel, mis en cache dans le JSON).
     cross_enabled = not args.sans_controle
     ready = [j for j in jobs if not j.report.error and j.cv is not None]
-    pending = []
+    pending: list[Job] = []
     for job in ready:
         if cached_controle(job):
             continue
         if cross_enabled and has_key and not args.depuis_json:
             pending.append(job)
     if pending:
-        client = client or make_client()
+        checker = client or make_client()
         print(f"  Contre-vérification de {len(pending)} CV…")
 
         def cross(job: Job) -> None:
+            if job.source is None or job.cv is None or job.stored is None:
+                return
             try:
-                verdicts = run_cross_check(client, job.source, job.cv, args.modele, args.effort)
+                verdicts = run_cross_check(checker, job.source, job.cv, args.modele, args.effort)
             except Exception as exc:
                 job.report.warnings.append(f"Contre-vérification impossible : {exc}")
                 return
             job.stored["controle"] = {
                 "version": CONTROLE_VERSION,
-                "empreinte": fingerprint(job.cv),
+                "empreinte": fingerprint_data(job.stored.get("cv", {})),
                 "modele": args.modele,
                 "date": dt.datetime.now().isoformat(timespec="seconds"),
                 "verdicts": verdicts_to_json(verdicts),
@@ -272,17 +310,20 @@ def run(args: argparse.Namespace) -> int:
     used_names: set[str] = set()
     photo_dir = data_dir / "photos"
     for job in ready:
-        report, source, meta = job.report, job.source, (job.stored or {}).get("_meta", {})
+        report, source, extracted = job.report, job.source, job.cv
+        if source is None or extracted is None:
+            continue
+        meta = (job.stored or {}).get("_meta", {})
         try:
-            raw = job.cv.model_copy(deep=True)
-            edited = meta.get("empreinte") not in (None, fingerprint(job.cv))
+            raw = extracted.model_copy(deep=True)
+            edited = json_edited(job.stored)
             apply_removals = source.text_is_reliable and not edited
             extractor = meta.get("extracteur", "?")
             report.extractor = extractor + (f" (effort {meta['effort']})" if meta.get("effort") else "")
             if edited:
                 report.extractor += " — JSON modifié à la main : modifications conservées, alertes seulement"
 
-            cross_findings = []
+            cross_findings: list[Finding] = []
             cached = cached_controle(job)
             if cached:
                 cross_findings = apply_verdicts(raw, verdicts_from_json(cached["verdicts"]), apply_removals)
@@ -291,7 +332,10 @@ def run(args: argparse.Namespace) -> int:
                 report.cross_check = "désactivée (--sans-controle)"
             else:
                 report.cross_check = "non effectuée (clé OpenAI absente)" if not has_key else "non effectuée"
-            checked, findings = verify(raw, source.reference_text, source.links, apply_removals)
+            # L'employeur et le client doivent être nommés ailleurs que dans l'en-tête, les coordonnées ou
+            # les pieds de page (un CV mis en forme par une ESN ne fait pas de l'ESN l'employeur).
+            body = source.body_text(raw.prenom, raw.nom, raw.titre)
+            checked, findings = verify(raw, source.reference_text, source.links, apply_removals, body, source.linkedin_roles)
             report.findings = cross_findings + findings
             report.skipped_sections = list(checked.sections_non_reprises)
 
@@ -336,7 +380,7 @@ def run(args: argparse.Namespace) -> int:
                 # Le titre court distingue deux consultants aux mêmes initiales.
                 short_title = re.split(r" [—–|-] |, ", contenu.tame_caps(contenu.clean_item(checked.titre)))[0][:40].strip() if checked.titre else ""
                 base = f"CV Logiclever - {name}" + (f" - {short_title}" if short_title else "") + " (anonyme)"
-                contact = {"email": None, "telephone": None, "linkedin": None, "localisation": final.contact.localisation}
+                contact: dict[str, str | None] = {"email": None, "telephone": None, "linkedin": None, "localisation": final.contact.localisation}
             else:
                 name = display_name(checked)
                 base = f"CV Logiclever - {name}"

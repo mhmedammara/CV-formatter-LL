@@ -5,10 +5,13 @@ from __future__ import annotations
 import datetime as dt
 import re
 import unicodedata
+from typing import overload
 
 from .config import BLACK, BLUE, DARK_GREY, GREY, ORANGE
 from .layout import Block, Para, Run
-from .schema import CV, Experience, Projet
+from .schema import CV, Certification, Experience, Formation, Langue, Projet
+
+Date = tuple[int, int | None]  # (année, mois éventuel)
 
 MOIS = [
     "janvier", "février", "mars", "avril", "mai", "juin",
@@ -44,8 +47,19 @@ _LOWER_WORDS = {
     "a", "à", "au", "aux", "d", "de", "des", "du", "en", "et", "l", "la", "le", "les", "ou", "par", "pour", "sur",
     "un", "une", "avec", "dans", "chez", "the", "of", "and", "for",
 }
+# Sigles de plus de 3 lettres courants dans les CV de consultants : gardés en majuscules (« CONSULTANTE AMOA SI »).
+KNOWN_ACRONYMS = {
+    "AMOA", "AMOE", "GMAO", "RGPD", "RGAA", "SIRH", "ITIL", "ITSM", "CMDB", "TOGAF", "CMMI", "COBIT", "ISTQB",
+    "PMBOK", "PSPO", "CSPO", "BPMN", "LDAP", "SIEM", "HTML", "JSON", "REST", "SOAP", "TOEIC", "TOEFL", "IELTS",
+    "HANA", "MOOC", "MIAGE", "DEUST", "DESS", "CNAM", "INSA", "ESSEC", "EDHEC", "INSEEC", "ESLSCA", "ESIEE",
+    "EPITA", "EFREI", "SCADA", "IFRS", "SWIFT", "DORA",
+}
 
 
+@overload
+def tame_caps(text: str) -> str: ...
+@overload
+def tame_caps(text: None) -> None: ...
 def tame_caps(text: str | None) -> str | None:
     """« CHEF DE PROJET SI JUNIOR » -> « Chef de projet SI junior » (casse seulement, aucun mot changé).
 
@@ -54,7 +68,8 @@ def tame_caps(text: str | None) -> str | None:
     if not text or not any(c.isalpha() for c in text) or text != text.upper() or len(text) < 8:
         return text
     words = re.split(r"(\s+)", text)
-    out, first = [], True
+    out: list[str] = []
+    first = True
     for word in words:
         if not word.strip():
             out.append(word)
@@ -63,8 +78,8 @@ def tame_caps(text: str | None) -> str | None:
         core = word.lower().strip("’'.,;:()&|-")
         if core in _LOWER_WORDS and not first:
             out.append(word.lower())
-        elif any(parts) and all(len(p) <= 3 for p in parts) and core not in _LOWER_WORDS:
-            out.append(word)  # sigle : SI, PO, MBA, IT/IS, MER…
+        elif any(parts) and all(len(p) <= 3 or p in KNOWN_ACRONYMS for p in parts) and core not in _LOWER_WORDS:
+            out.append(word)  # sigle : SI, PO, MBA, IT/IS, MER, AMOA…
         else:
             low = word.lower()
             out.append(low[:1].upper() + low[1:] if first else low)
@@ -92,7 +107,7 @@ def clean_item(text: str, capitalize: bool = True) -> str:
 # --- Dates -----------------------------------------------------------------------------
 
 
-def parse_date(value: str | None) -> tuple[int, int | None] | None:
+def parse_date(value: str | None) -> Date | None:
     if not value:
         return None
     match = re.fullmatch(r"\s*(\d{4})(?:-(\d{1,2}))?\s*", value)
@@ -105,9 +120,47 @@ def parse_date(value: str | None) -> tuple[int, int | None] | None:
     return year, month
 
 
-def _months_in_text(text: str) -> list[int]:
+def months_in_text(text: str) -> list[int]:
     tokens = re.findall(r"[a-z]+", strip_accents(text.lower()))
     return [_MONTH_LOOKUP[t] for t in tokens if t in _MONTH_LOOKUP]
+
+
+_PRESENT_WORDS = re.compile(r"\b(?:present|aujourd'?\s?hui|en cours|actuel(?:lement)?|now|today|current|ce jour)\b")
+
+
+def parse_period(text: str | None) -> tuple[str | None, str | None]:
+    """Début et fin d'une période écrite, au format « AAAA-MM », « AAAA » ou « present ».
+
+    « Apr - Sep 2024 », « Jan - Déc 2021 », « 06/2022 – 04/2024 », « Depuis fév. 2024 », « Sep 2023 - Présent ».
+    Lecture faite par le code (et non par le modèle, dont la normalisation varie d'un passage à l'autre) ;
+    (None, None) si la période ne se lit pas sans ambiguïté."""
+    if not text:
+        return None, None
+    folded = strip_accents(re.sub(r"\(.*?\)", " ", text).lower()).replace("’", "'")
+    dates: list[tuple[int, int | None]] = []
+    pending: list[int] = []  # mois en attente de leur année (« Apr - Sep 2024 »)
+    for num_month, num_year, year, word in re.findall(r"(\d{1,2})[/.](\d{4})|((?:19|20)\d{2})|([a-z]+)", folded):
+        if num_year:
+            if not 1 <= int(num_month) <= 12:
+                return None, None
+            dates.append((int(num_year), int(num_month)))
+        elif year:
+            dates += [(int(year), month) for month in pending] or [(int(year), None)]
+            pending = []
+        elif word in _MONTH_LOOKUP:
+            pending.append(_MONTH_LOOKUP[word])
+    present = bool(_PRESENT_WORDS.search(folded)) or folded.strip().startswith("depuis")
+    if pending or not dates or len(dates) > 2 or (present and len(dates) == 2):
+        return None, None
+
+    def fmt(date: tuple[int, int | None]) -> str:
+        return f"{date[0]}-{date[1]:02d}" if date[1] else str(date[0])
+
+    if len(dates) == 2:
+        if (dates[1][0], dates[1][1] or 0) < (dates[0][0], dates[0][1] or 0):
+            return None, None
+        return fmt(dates[0]), fmt(dates[1])
+    return fmt(dates[0]), ("present" if present else fmt(dates[0]))
 
 
 def _dates_consistent(exp: Experience) -> bool:
@@ -119,14 +172,14 @@ def _dates_consistent(exp: Experience) -> bool:
     if start is None:
         return False
     years_text = {int(y) for y in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", exp.periode_texte)}
-    years_dates = {start[0]} | ({end[0]} if end else set())
+    years_dates = {start[0]} | ({end[0]} if end else set[int]())
     if years_text != years_dates:
         return False
     months_dates = [m for m in (start[1], end[1] if end else None) if m]
-    return _months_in_text(exp.periode_texte) == months_dates
+    return months_in_text(exp.periode_texte) == months_dates
 
 
-def _fmt(date: tuple[int, int | None]) -> str:
+def _fmt(date: Date) -> str:
     year, month = date
     return f"{MOIS[month - 1].capitalize()} {year}" if month else str(year)
 
@@ -139,8 +192,8 @@ def clean_period_text(text: str) -> str:
 
 
 def format_period(exp: Experience) -> str | None:
-    if _dates_consistent(exp):
-        start = parse_date(exp.debut)
+    start = parse_date(exp.debut)
+    if start is not None and _dates_consistent(exp):
         if exp.fin == "present":
             return f"{_fmt(start)} – Aujourd’hui"
         end = parse_date(exp.fin)
@@ -166,7 +219,7 @@ def effective_type(exp: Experience) -> str:
     return exp.type
 
 
-def _index(date: tuple[int, int | None], is_end: bool, other_has_month: bool) -> int:
+def _index(date: Date, is_end: bool, other_has_month: bool) -> int:
     """Indice de mois (début inclus, fin exclue). Année seule : « 2020 – 2022 » vaut 2 ans ; face à
     une date précise au mois, l'année seule est lue au milieu de l'année (ni janvier, ni décembre)."""
     year, month = date
@@ -187,7 +240,10 @@ def computed_years(cv: CV, document_date: dt.date | None = None) -> tuple[int | 
     """
     today = dt.date.today()
     now_index = today.year * 12 + today.month  # mois en cours inclus
-    intervals, excluded, complete, current = [], [], True, []
+    intervals: list[tuple[int, int]] = []
+    excluded: list[str] = []
+    current: list[str] = []
+    complete = True
     for exp in cv.experiences:
         name = " — ".join(x for x in (exp.poste, exp.entreprise) if x) or "expérience"
         kind = effective_type(exp)
@@ -201,7 +257,7 @@ def computed_years(cv: CV, document_date: dt.date | None = None) -> tuple[int | 
             continue
         end_is_precise = exp.fin == "present" or (end is not None and end[1] is not None)
         start_index = _index(start, False, end_is_precise)
-        if exp.fin == "present":
+        if end is None:  # poste en cours
             end_index = now_index
             current.append(name)
         else:
@@ -265,31 +321,37 @@ def experience_label(cv: CV, document_date: dt.date | None = None) -> tuple[str 
 
 def sort_experiences(experiences: list[Experience]) -> list[Experience]:
     """Tri antichronologique si toutes les expériences sont datées, sinon ordre du CV."""
-    keys = []
+    keys: list[tuple[tuple[int, int], tuple[int, int]]] = []
     for exp in experiences:
         start = parse_date(exp.debut)
         if start is None:
             return experiences
         end = (9999, 12) if exp.fin == "present" else (parse_date(exp.fin) or start)
         keys.append(((end[0], end[1] or 0), (start[0], start[1] or 0)))
-    order = sorted(range(len(experiences)), key=lambda i: keys[i], reverse=True)
+    order = sorted(range(len(experiences)), key=keys.__getitem__, reverse=True)
     return [experiences[i] for i in order]
 
 
 # --- Paragraphes stylés --------------------------------------------------------------
 
 BODY = 10.0
+TYPE_TAGS = {"alternance": "Alternance", "stage": "Stage", "freelance": "Freelance"}  # mention à côté des dates
 
 
 def experience_block(exp: Experience, condensed: bool = False) -> Block:
-    head_text = tame_caps(exp.poste) or exp.entreprise or exp.client or "Expérience"
+    """Poste, puis « Employeur · Client : X · Lieu » (le client est toujours libellé : la relation
+    employeur / client ne peut pas être mal lue), puis la période et les réalisations. L'environnement
+    technique d'une expérience n'est pas affiché."""
+    # Un client n'est jamais affiché seul en titre : il reste libellé « Client : … » (sinon il passerait pour l'employeur).
+    poste = clean_item(tame_caps(exp.poste)) if exp.poste else None  # « chargée de recouvrement » -> « Chargée … »
+    head_text = poste or exp.entreprise or ("Mission" if exp.client else "Bénévolat" if exp.type == "benevolat" else "Expérience")
     paras = [Para([Run(head_text, "semibold", 12, BLACK)], space_before=11, keep_with_next=True)]
 
     org: list[Run] = []
     if exp.poste and exp.entreprise:
         org.append(Run(exp.entreprise, "medium", BODY, BLUE))
     if exp.client and exp.client != head_text:
-        org.append(Run(("Client : " if org else "") + exp.client, "regular", BODY, BLUE))
+        org.append(Run("Client : " + exp.client, "regular", BODY, BLUE))
     if exp.lieu:
         org.append(Run(exp.lieu, "regular", BODY, BLUE))
     if org:
@@ -302,25 +364,20 @@ def experience_block(exp: Experience, condensed: bool = False) -> Block:
 
     period = format_period(exp)
     if period:
-        label = period + ("  ·  Alternance" if exp.type == "alternance" else "  ·  Stage" if exp.type == "stage" else "")
+        label = "  ·  ".join(x for x in (period, TYPE_TAGS.get(exp.type)) if x)
         paras.append(Para([Run(label, "medium", 9.5, ORANGE)], space_before=1, keep_with_next=True))
 
     if exp.contexte:
         paras.append(Para([Run(clean_item(exp.contexte), "regular", BODY, DARK_GREY)], space_before=3, line_spacing=1.1))
     for item in [] if condensed else exp.realisations:
         text = clean_item(item)
-        if text:
+        if not text:
+            continue
+        if item.rstrip().endswith(":"):  # intitulé de mission ou de rubrique (« Product Backlog Refinement : »)
+            paras.append(Para([Run(text, "semibold", BODY, BLACK)], space_before=4, line_spacing=1.1, keep_with_next=True))
+        else:
             paras.append(Para([Run(text, "regular", BODY, BLACK)], bullet="•", indent=0.4, space_before=2, line_spacing=1.1))
-    env = [clean_item(e, False) for e in exp.environnement if clean_item(e, False)]
-    if env:
-        paras.append(
-            Para(
-                [Run("Environnement : ", "semibold", 9, GREY), Run(", ".join(env), "regular", 9, GREY)],
-                space_before=4,
-                line_spacing=1.1,
-            )
-        )
-    suite_title = " — ".join(x for x in (tame_caps(exp.poste), exp.entreprise) if x) or head_text
+    suite_title = " — ".join(x for x in (poste, exp.entreprise or exp.client) if x) or head_text
     continuation = Para([Run(f"{suite_title} (suite)", "medium", BODY, GREY)], space_before=0, keep_with_next=True)
     return Block(paras, continuation)
 
@@ -337,11 +394,6 @@ def project_block(prj: Projet, titles_only: bool = False) -> Block:
         text = clean_item(line)
         if text:
             paras.append(Para([Run(text, "regular", BODY, BLACK)], bullet="•", indent=0.4, space_before=2, line_spacing=1.1))
-    env = [clean_item(e, False) for e in prj.environnement if clean_item(e, False)]
-    if env:
-        paras.append(
-            Para([Run("Environnement : ", "semibold", 9, GREY), Run(", ".join(env), "regular", 9, GREY)], space_before=4, line_spacing=1.1)
-        )
     continuation = Para([Run(f"{clean_item(tame_caps(prj.nom))} (suite)", "medium", BODY, GREY)], keep_with_next=True)
     return Block(paras, continuation)
 
@@ -352,11 +404,9 @@ def label_para(text: str) -> Para:
 
 
 def bullet_paras(items: list[str], size: float = BODY) -> list[Para]:
-    return [
-        Para([Run(clean_item(item), "regular", size, BLACK)], bullet="•", indent=0.35, line_spacing=1.1, space_before=1)
-        for item in items
-        if clean_item(item)
-    ]
+    # « PRODUCT MANAGEMENT » -> « Product management » (casse seulement ; un nom de produit à chiffres reste tel quel).
+    texts = [clean_item(item if any(c.isdigit() for c in item) else tame_caps(item)) for item in items]
+    return [Para([Run(text, "regular", size, BLACK)], bullet="•", indent=0.35, line_spacing=1.1, space_before=1) for text in texts if text]
 
 
 def inline_para(items: list[str], size: float = BODY) -> list[Para]:
@@ -364,8 +414,8 @@ def inline_para(items: list[str], size: float = BODY) -> list[Para]:
     return [Para([Run("  ·  ".join(cleaned), "regular", size, BLACK)], line_spacing=1.15, space_before=1)] if cleaned else []
 
 
-def langues_paras(langues: list) -> list[Para]:
-    paras = []
+def langues_paras(langues: list[Langue]) -> list[Para]:
+    paras: list[Para] = []
     for lang in langues:
         runs = [Run(clean_item(lang.langue), "semibold", BODY, BLACK)]
         if lang.niveau:
@@ -374,8 +424,8 @@ def langues_paras(langues: list) -> list[Para]:
     return paras
 
 
-def certification_paras(certifications: list) -> list[Para]:
-    paras = []
+def certification_paras(certifications: list[Certification]) -> list[Para]:
+    paras: list[Para] = []
     for i, cert in enumerate(certifications):
         paras.append(Para([Run(clean_item(tame_caps(cert.intitule)), "semibold", BODY, BLACK)], line_spacing=1.05, space_before=0 if i == 0 else 5, keep_with_next=True))
         meta = [x.strip() for x in (cert.organisme, cert.date) if x and x.strip()]
@@ -386,8 +436,8 @@ def certification_paras(certifications: list) -> list[Para]:
     return paras
 
 
-def formation_paras(formations: list, with_details: bool = True) -> list[Para]:
-    paras = []
+def formation_paras(formations: list[Formation], with_details: bool = True) -> list[Para]:
+    paras: list[Para] = []
     for i, form in enumerate(formations):
         details = form.details if with_details else None
         paras.append(Para([Run(clean_item(tame_caps(form.diplome)), "semibold", BODY, BLACK)], line_spacing=1.05, space_before=0 if i == 0 else 5, keep_with_next=True))

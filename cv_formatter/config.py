@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal, get_args
 
 from dotenv import load_dotenv
 
@@ -12,14 +13,26 @@ PROJECT_ROOT = PACKAGE_DIR.parent
 ASSETS_DIR = PACKAGE_DIR / "assets"
 FONTS_DIR = ASSETS_DIR / "fonts"
 TEMPLATE_PATH = ASSETS_DIR / "modele_cv_logiclever.pptx"
+INPUT_DIR = PROJECT_ROOT / "Input"  # dossier où déposer les CV à traiter (CV ou .zip)
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "sortie"
 DATA_DIR = DEFAULT_OUTPUT_DIR / "_donnees"  # extractions mises en cache, partagées par toutes les sorties
 
 load_dotenv(PROJECT_ROOT / ".env")
 
+Effort = Literal["none", "low", "medium", "high", "xhigh", "max"]  # effort de raisonnement accepté par l'API
+EFFORT_CHOICES: tuple[Effort, ...] = get_args(Effort)
+
+
+def parse_effort(value: str) -> Effort:
+    """Effort de raisonnement lu dans .env ou sur la ligne de commande ; « high » si la valeur est inconnue."""
+    for choice in EFFORT_CHOICES:
+        if choice == value:
+            return choice
+    return "high"
+
+
 DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-6-luna")
-DEFAULT_EFFORT = os.environ.get("OPENAI_EFFORT", "high")
-EFFORT_CHOICES = ("none", "low", "medium", "high", "xhigh", "max")
+DEFAULT_EFFORT: Effort = parse_effort(os.environ.get("OPENAI_EFFORT", "high"))
 
 # Couleurs du thème Logiclever (theme1.xml du modèle).
 ORANGE = "FF5D24"

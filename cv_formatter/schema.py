@@ -129,14 +129,14 @@ class CV(BaseModel):
     contact: Contact
     annees_experience: AnneesExperience
     expertise: list[str] = Field(
-        description="Jusqu'à 8 domaines d'expertise (métier, fonctionnels ou techniques) formulés avec des termes présents dans le CV. Liste vide si rien d'explicite."
+        description="Jusqu'à 8 domaines d'expertise (métier, fonctionnels ou techniques) formulés avec des termes présents dans le CV, y compris les normes et réglementations maîtrisées (RGPD, DSP2…). Liste vide si rien d'explicite."
     )
     outils_si: list[str] = Field(
         description=(
             "Jusqu'à 15 outils et technologies que le CV présente comme utilisés ou maîtrisés : logiciels, ERP, "
             "plateformes, langages, bases de données, frameworks, outils de gestion (ex. Jira) — les plus "
-            "représentatifs. Pas de méthodologies (Agile, Scrum, SAFe, cycle en V…), ni de normes ou "
-            "réglementations, ni de connaissances métier. Liste vide si le CV n'en cite pas."
+            "représentatifs, y compris les méthodologies (Scrum, SAFe, cycle en V…). Pas de normes ni de "
+            "réglementations (elles vont dans expertise). Liste vide si le CV n'en cite pas."
         )
     )
     competences_detaillees: list[CategorieCompetences] = Field(

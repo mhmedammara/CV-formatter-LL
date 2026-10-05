@@ -242,7 +242,7 @@ texte tient dans sa zone sans le vérifier à l'œil.
 Elle reste **toujours sur la page 1** : police réduite jusqu'à 75 %, puis masquage des spécialités de
 formation, puis des derniers éléments des listes les plus longues (en gardant des minimums : 5 outils,
 2 certifications, 3 domaines d'expertise…). Tout ce qui est masqué est listé dans le rapport.
-Blocs : Expertise, Langues, SI & outils (logiciels, plateformes, technologies — pas de méthodologies ni de normes).
+Blocs : Expertise, Langues, SI & outils (logiciels, plateformes, technologies et méthodologies) ; les normes et réglementations (RGPD, DSP2…) vont dans Expertise.
 Il n'y a plus de bloc Méthode (peu d'information dans la plupart des CV). Un bloc Expertise ou SI & outils de
 moins de 3 éléments n'est pas affiché (il mettrait en avant des détails).
 

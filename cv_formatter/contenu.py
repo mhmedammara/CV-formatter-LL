@@ -181,7 +181,8 @@ def computed_years(cv: CV, document_date: dt.date | None = None) -> tuple[int | 
     Comptent : emploi, mission, freelance, création d'entreprise.
     Ne comptent pas : alternance, stage, bénévolat, autre, projets. Un poste « en cours » est compté
     jusqu'à aujourd'hui ; si le CV (date du PDF) a plus d'un an, un avertissement invite à vérifier
-    qu'il l'est toujours. Union des périodes (les trous ne comptent pas), arrondi à l'année inférieure.
+    qu'il l'est toujours. Union des périodes (les trous ne comptent pas), arrondi à l'année supérieure
+    dès qu'au moins un mois est prouvé (aucune expérience prouvée : pas de pastille).
     Renvoie (années, détail, complet, avertissement) ; complet = toutes les expériences pro sont datées.
     """
     today = dt.date.today()
@@ -226,9 +227,11 @@ def computed_years(cv: CV, document_date: dt.date | None = None) -> tuple[int | 
             total += cur_end - cur_start
             cur_start, cur_end = start, end
     total += cur_end - cur_start
-    years = total // 12
-    detail = f"{total} mois prouvés par les dates, {detail_ref}{excl}"
-    return (years if years >= 1 else None), detail, complete, stale
+    if total <= 0:  # aucune expérience prouvée : pas de pastille
+        return None, f"aucune période professionnelle datée hors alternance/stage{excl}", complete, None
+    years = -(-total // 12)  # arrondi à l'année supérieure (demande de l'équipe commerciale)
+    detail = f"{total} mois prouvés par les dates, arrondis à l'année supérieure, {detail_ref}{excl}"
+    return years, detail, complete, stale
 
 
 def experience_label(cv: CV, document_date: dt.date | None = None) -> tuple[str | None, str, str | None]:

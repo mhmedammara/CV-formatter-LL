@@ -185,10 +185,12 @@ La pastille « N ans d'expérience » affiche des années **prouvées par les da
    vérifier qu'il est toujours d'actualité.
 4. Dates à l'année seule : « 2020 – 2022 » = 2 ans ; face à une date au mois près, l'année seule est lue au
    milieu de l'année.
-5. **Arrondi à l'année inférieure.**
+5. **Arrondi à l'année supérieure** dès qu'au moins un mois d'expérience est prouvé (33 mois → 3 ans) ;
+   aucune expérience prouvée → pas de pastille.
 6. Si le CV **écrit** un nombre d'années, il est **vérifié** : si les dates en justifient moins, c'est le nombre
-   justifié qui s'affiche (« le CV annonce 16 ans mais ses dates n'en justifient que 15 ») ; si le CV n'a pas de
-   dates, le nombre écrit est gardé et signalé « à confirmer ». Aucune période exploitable → pas de pastille.
+   justifié qui s'affiche (« le CV annonce 8 ans mais ses dates n'en justifient que 6 ») ; si les dates en
+   justifient autant ou plus, c'est le nombre écrit qui s'affiche (jamais plus que ce que le consultant annonce) ;
+   si le CV n'a pas de dates, le nombre écrit est gardé et signalé « à confirmer ».
 
 Le détail du calcul (mois retenus, expériences exclues et pourquoi) figure dans le rapport.
 
@@ -378,7 +380,7 @@ Le projet a été développé avec Claude Code, par étapes, chaque étape étan
 
 - Une seule page ; pages de suite uniquement pour les expériences des profils très expérimentés.
 - Années d'expérience : alternance et stages exclus ; création d'entreprise comptée ; poste en cours compté
-  jusqu'à aujourd'hui ; nombre annoncé dans le CV vérifié par les dates.
+  jusqu'à aujourd'hui ; arrondi à l'année supérieure ; nombre annoncé dans le CV vérifié par les dates.
 - Libellé « SI & outils » (plus juste que « SI » pour une liste qui mélange outils et technologies).
 - E-mail et LinkedIn cliquables ; photo avec marges ; anonymisation ; OCR.
 

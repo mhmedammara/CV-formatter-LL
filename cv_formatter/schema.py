@@ -129,7 +129,7 @@ class CV(BaseModel):
     contact: Contact
     annees_experience: AnneesExperience
     expertise: list[str] = Field(
-        description="Jusqu'à 8 domaines d'expertise (métier, fonctionnels ou techniques) formulés avec des termes présents dans le CV, y compris les normes et réglementations maîtrisées (RGPD, DSP2…). Liste vide si rien d'explicite."
+        description="Jusqu'à 8 domaines d'expertise (métier, fonctionnels ou techniques) formulés avec des termes présents dans le CV. Une norme ou réglementation seulement citée dans une réalisation n'en est pas une. Liste vide si rien d'explicite."
     )
     outils_si: list[str] = Field(
         description=(

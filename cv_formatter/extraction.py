@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 # À incrémenter quand la consigne ou le schéma changent : les extractions enregistrées avec une version
 # antérieure sont refaites au lancement suivant (sauf JSON corrigé à la main ou --depuis-json).
-EXTRACTION_VERSION = 9
+EXTRACTION_VERSION = 11
 
 SYSTEM_PROMPT = """\
 Tu es l'assistant de l'équipe commerciale de Logiclever, une ESN française. Tu reçois le CV \
@@ -49,7 +49,7 @@ RÉPARTITION
 - experiences : toutes les expériences professionnelles (emplois, missions, alternances, stages, \
 freelance, création d'entreprise). Employeur et client : voir la section dédiée ci-dessous.
 - projets : projets personnels ou présentés dans une section à part ; ne duplique pas une expérience.
-- expertise : jusqu'à 8 domaines d'expertise exprimés avec des termes présents dans le CV ; les normes et \nréglementations maîtrisées (ex. RGPD, DSP2, ISO 27001) vont ici.
+- expertise : jusqu'à 8 domaines d'expertise exprimés avec des termes présents dans le CV. Une norme ou \nréglementation (RGPD, DSP2…) n'y va que si le CV la présente comme une compétence, pas si elle est seulement \ncitée dans une réalisation.
 - outils_si : jusqu'à 15 outils et technologies (logiciels, ERP, plateformes, langages…) que le CV \
 présente comme utilisés ou maîtrisés, y compris les méthodologies (Scrum, SAFe, cycle en V…) ; pas \nde normes ni de réglementations (elles vont dans expertise).
 - environnement d'une expérience : les lignes « Environnement », « Env. technique », « Tech. »… vont \

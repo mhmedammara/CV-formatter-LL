@@ -342,9 +342,9 @@ de la pastille, sections non reprises (hobbies, « À propos »…), ajustements
 ```json
 {
   "_meta": {"source": "...", "sha256": "...", "extracteur": "gpt-6-luna", "effort": "high",
-            "date": "...", "empreinte": "...", "tokens_entree": 9000, "tokens_sortie": 4000},
+            "version_extraction": 8, "date": "...", "empreinte": "...", "tokens_entree": 9000, "tokens_sortie": 4000},
   "cv": { "prenom": "...", "nom": "...", "titre": "...", "contact": {"...": "..."}, "experiences": ["..."] },
-  "controle": {"version": 3, "empreinte": "...", "modele": "gpt-6-luna", "verdicts": ["..."]}
+  "controle": {"version": 8, "empreinte": "...", "modele": "gpt-6-luna", "verdicts": ["..."]}
 }
 ```
 

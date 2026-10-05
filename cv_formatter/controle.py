@@ -8,6 +8,7 @@ mauvaise expérience ou les dates déformées.
 
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import dataclass
 
@@ -40,8 +41,18 @@ class Claim:
     label: str
 
 
-def build_claims(cv: CV) -> list[Claim]:
+PHOTO_CLAIM = "PHOTO"  # affirmation ajoutée seulement si une photo est retenue (n'invalide pas le cache)
+
+
+def normalize_id(raw: str) -> str:
+    """Le modèle recopie parfois l'identifiant avec ses crochets (« [E0] ») : on les retire."""
+    return raw.strip().strip("[]").strip()
+
+
+def build_claims(cv: CV, with_photo: bool = False) -> list[Claim]:
     claims: list[Claim] = []
+    if with_photo:
+        claims.append(Claim(PHOTO_CLAIM, "L'image jointe (photo retenue pour le CV) est une photographie du visage d'une personne, et non un logo, un badge, une icône ou une illustration.", ("photo_candidate",), "Photo"))
     if cv.titre:
         claims.append(Claim("T", f"Titre du consultant : « {cv.titre} »", ("titre",), "Titre"))
     if cv.annees_experience.valeur:
@@ -91,14 +102,24 @@ def build_claims(cv: CV) -> list[Claim]:
 
 
 def run_cross_check(client, source: SourceDocument, cv: CV, model: str, effort: str) -> list[Verdict]:
-    claims = build_claims(cv)
+    photo = None
+    if cv.photo_candidate and 1 <= cv.photo_candidate <= len(source.candidates):
+        photo = source.candidates[cv.photo_candidate - 1]
+    claims = build_claims(cv, with_photo=photo is not None)
     if not claims:
         return []
     listing = "\n".join(f"[{c.id}] {c.text}" for c in claims)
+    content = [pdf_part(source), {"type": "input_text", "text": "Affirmations à contrôler :\n" + listing}]
+    if photo is not None:
+        data = base64.b64encode(photo.thumbnail_png()).decode("ascii")
+        content += [
+            {"type": "input_text", "text": f"Image jointe pour l'affirmation [{PHOTO_CLAIM}] :"},
+            {"type": "input_image", "image_url": f"data:image/png;base64,{data}"},
+        ]
     response = client.responses.parse(
         model=model,
         instructions=PROMPT,
-        input=[{"role": "user", "content": [pdf_part(source), {"type": "input_text", "text": "Affirmations à contrôler :\n" + listing}]}],
+        input=[{"role": "user", "content": content}],
         text_format=Controle,
         reasoning={"effort": effort},
         max_output_tokens=64000,
@@ -127,7 +148,7 @@ def apply_verdicts(cv: CV, verdicts: list[Verdict], apply_removals: bool) -> lis
     findings: list[Finding] = []
     to_delete: list[tuple] = []
     for verdict in verdicts:
-        claim = claims.get(verdict.id)
+        claim = claims.get(normalize_id(verdict.id))
         if claim is None or verdict.statut == "confirme":
             continue
         if claim.path[-1] == "type":
@@ -158,6 +179,14 @@ def apply_verdicts(cv: CV, verdicts: list[Verdict], apply_removals: bool) -> lis
         except (IndexError, AttributeError, KeyError):
             continue
     return findings
+
+
+def photo_verdict(verdicts: list[Verdict]) -> tuple[bool | None, str]:
+    """Avis du modèle sur la photo retenue : True (visage), False (pas un visage), None (pas d'avis)."""
+    for verdict in verdicts:
+        if normalize_id(verdict.id) == PHOTO_CLAIM:
+            return verdict.statut == "confirme", verdict.explication
+    return None, ""
 
 
 def verdicts_to_json(verdicts: list[Verdict]) -> list[dict]:

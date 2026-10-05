@@ -68,6 +68,9 @@ def anonymize(cv: CV) -> CV:
         if key in ("prenom", "nom", "contact", "langue_source", "photo_candidate"):
             continue
         data[key] = walk(data[key])
+    # Le nom complet ne doit subsister nulle part dans les données anonymisées (défense en profondeur).
+    parts = short.split(" ", 1)
+    data["prenom"], data["nom"] = parts[0], (parts[1] if len(parts) > 1 else None)
     data["contact"]["email"] = None
     data["contact"]["telephone"] = None
     data["contact"]["linkedin"] = None

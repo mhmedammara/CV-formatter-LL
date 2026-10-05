@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote
 
 from .verification import Finding
 
@@ -18,6 +20,8 @@ class CVReport:
     pages: int = 0
     extractor: str = ""
     photo: str = ""
+    photo_file: Path | None = None  # photo choisie (vignette dans le rapport), même si elle a été retirée
+    photo_rejected: bool = False
     experience: str = ""
     cross_check: str = ""
     skipped_sections: list[str] = field(default_factory=list)
@@ -66,6 +70,10 @@ def write_report(reports: list[CVReport], target: Path, settings: str) -> Path:
         if r.cross_check:
             lines.append(f"- Contre-vérification : {r.cross_check}")
         lines.append(f"- Photo : {r.photo}")
+        if r.photo_file and r.photo_file.exists():
+            rel = quote(os.path.relpath(r.photo_file, target.parent).replace("\\", "/"))
+            label = "image retirée (pas un visage)" if r.photo_rejected else "photo utilisée"
+            lines.append(f'  <br><img src="{rel}" width="90" alt="{label}"> <sub>{label}</sub>')
         lines.append(f"- Pastille d'expérience : {r.experience}")
         if r.skipped_sections:
             lines.append(f"- Sections du CV non reprises (absentes du modèle) : {', '.join(r.skipped_sections)}")

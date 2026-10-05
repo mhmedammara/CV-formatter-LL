@@ -165,7 +165,10 @@ et répond pour chacune : `confirme`, `absent` ou `inexact`.
 - **Nature** (alternance/stage) : affirmation formulée « le CV ne présente pas cette expérience comme une
   alternance ou un stage ». Si le modèle la juge `inexact`, l'expérience est **exclue du calcul des années**
   et signalée — elle n'est jamais retirée.
+- **Photo** : si une photo a été retenue, sa vignette est jointe et le modèle dit s'il s'agit bien d'un visage
+  (et non d'un logo ou d'un badge) — utilisé par le contrôle de la photo (3.7).
 - `inexact` sur le reste → signalé « à vérifier ».
+- Les identifiants renvoyés sont normalisés (le modèle les recopie parfois avec leurs crochets, « [E0] »).
 - Les verdicts sont mis en cache dans le JSON (empreinte des données + `CONTROLE_VERSION`).
 
 Ce second regard attrape ce que le contrôle par mots-clés ne peut pas voir : une réalisation rattachée à la
@@ -249,6 +252,15 @@ rangée en certification n'est affichée qu'une fois.
    pixels donne exactement ce que l'on voit dans le CV — y compris pour une photo **pivotée**, rognée en
    **cercle** ou **détourée**. L'extérieur du masque est blanchi, puis recadrage carré (haut privilégié pour un
    portrait vertical), JPEG 800 px.
+4. **Contrôle du visage** (`visage.py`) : la photo retenue passe dans un détecteur de visage local (YuNet
+   d'OpenCV, modèle de 230 Ko sous licence MIT fourni dans `assets/`) — gratuit, hors ligne, indépendant du LLM.
+   Le visage doit être net (confiance ≥ 60 %) et assez grand (≥ 12 % de la largeur).
+   - visage détecté → photo gardée (signalée si le modèle a un doute) ;
+   - pas de visage détecté mais confirmé par le modèle → gardée et signalée ;
+   - ni détecté ni confirmé → **retirée** et signalée : un logo dans le cadre photo est pire qu'une absence de photo
+     (sauf JSON corrigé à la main : gardée et signalée).
+   - aucune image retenue alors qu'une image écartée contient un visage → signalé.
+5. **Rapport** : la vignette de la photo utilisée — ou de l'image retirée — est affichée sous la ligne « Photo ».
 
 ### 3.8 Export et polices — `export_pdf.py`, `fonts.py`
 
@@ -291,6 +303,7 @@ de la pastille, sections non reprises (hobbies, « À propos »…), ajustements
 | Cache des extractions | Coût et temps : un CV n'est envoyé qu'une fois ; corrections manuelles possibles | Ré-extraction à chaque lancement |
 | Copie nettoyée du modèle, champs repérés par balises | Fichiers légers ; le modèle peut évoluer sans toucher au code | Positions codées en dur |
 | Polices installées + intégrées par PowerPoint | Rendu identique partout, PDF comme PPTX | Laisser les sous-ensembles du modèle (glyphes manquants) |
+| Contrôle de la photo par un détecteur local + l'avis du modèle | Deux regards indépendants ; un logo ou un badge ne finit jamais dans le cadre photo | Faire confiance au seul choix du modèle |
 | Liens posés sur la zone de texte | Cliquables dans le PDF sans le soulignement bleu imposé par PowerPoint | Lien sur le texte (souligné, hors charte) |
 | OCR Windows puis Tesseract | Déjà présent sur tous les postes Windows, français, hors ligne, gratuit | Service d'OCR en ligne |
 
@@ -333,8 +346,11 @@ cv_formatter/
   layout.py        mesure du texte (métriques Lexend) et modèle de paragraphes
   render_pptx.py   remplissage du modèle : en-tête, colonne droite, pagination, pages de suite
   export_pdf.py    PPTX → PDF via PowerPoint (polices intégrées) ou LibreOffice
+  visage.py        contrôle de la photo : détection de visage (YuNet / OpenCV)
   anonymisation.py, rapport.py, fonts.py, config.py
-  assets/          modèle nettoyé + polices Lexend (OFL)
+  assets/          modèle nettoyé, polices Lexend (OFL), modèle de détection de visage (MIT)
+tests/
+  test_cv_formatter.py   tests de non-régression (données fictives, aucun vrai CV)
 ```
 
 | Pour changer… | Où |
@@ -347,6 +363,7 @@ cv_formatter/
 | Les styles (tailles, couleurs, espacements) | `contenu.py` (`experience_block`, `formation_paras`…) et `config.py` (couleurs, géométrie) |
 | La réduction minimale / les minimums de la colonne droite | `render_pptx.py` (`_right_column`, `RIGHT_MINIMUMS`) |
 | La règle d'une page et l'ordre de condensation | `render_pptx.py` (`_fit_left`) |
+| La sévérité du contrôle de la photo | `visage.py` (`SCORE_THRESHOLD`, `MIN_FACE_RATIO`) et `photo_decision` dans `__main__.py` |
 | La position et la taille de la photo | `config.py` (`PHOTO_X`, `PHOTO_SIZE`, `PHOTO_BOTTOM`, `PHOTO_GAP`) |
 | Le modèle PowerPoint | `assets/modele_cv_logiclever.pptx` (garder les balises `{{…}}`) ou `--template` |
 
@@ -384,10 +401,27 @@ Le projet a été développé avec Claude Code, par étapes, chaque étape étan
 - Libellé « SI & outils » (plus juste que « SI » pour une liste qui mélange outils et technologies).
 - E-mail et LinkedIn cliquables ; photo avec marges ; anonymisation ; OCR.
 
-**Comment vérifier après une modification** : relancer `python -m cv_formatter --depuis-json` (aucun appel API),
-ouvrir les PDF de `sortie/` et `rapport.md`. Pour un changement de mise en page, vérifier un CV court, un CV
-dense d'une page et un CV de plusieurs pages ; pour un changement de règle de contrôle, vérifier qu'aucun
-élément vrai n'est retiré (`0 retiré(s)` attendu sur des extractions fidèles).
+8. **Contrôle de la photo** testé avec un CV fictif dont la seule image est un badge de certification choisi à
+   tort comme photo : le détecteur local ne trouve aucun visage, le modèle répond « badge, pas une photographie de
+   visage » → photo retirée, signalée, vignette dans le rapport. Les 6 vraies photos sont détectées (confiance
+   94–95 %) ; logos, icônes et fonds décoratifs sont rejetés.
+9. **Non-régression** après l'ajout du contrôle de la photo : les 8 CV (et leurs versions anonymes) régénérés
+   sont identiques à la veille (texte identique, 0,00 % de pixels modifiés) ; seul le rapport change. Cette
+   vérification a aussi révélé et corrigé un défaut : des verdicts de contre-vérification renvoyés avec des
+   crochets (« [E0] ») étaient ignorés sans message.
+
+**Tests automatiques** (données fictives, aucun vrai CV) : `python -m pytest -q` après
+`pip install -r requirements-dev.txt`. Ils couvrent le contrôle anti-invention (inventions retirées, vraies
+informations gardées malgré les tolérances), l'application des verdicts (y compris identifiants entre
+crochets), les années d'expérience, les décisions sur la photo, la détection de visage, la typographie, la mesure
+du texte, le rendu (une page, aucun champ `{{…}}` restant, liens, pages de suite réservées aux expériences)
+et l'anonymisation.
+
+**Comment vérifier après une modification** :
+1. `python -m pytest -q` (tests automatiques, quelques secondes) ;
+2. copier les PDF de `sortie/` de côté, relancer `python -m cv_formatter --depuis-json` (aucun appel API) et
+   comparer : texte et pages identiques attendus, sauf effet voulu de la modification ;
+3. relire `rapport.md` : `0 retiré(s)` attendu sur des extractions fidèles.
 
 ---
 

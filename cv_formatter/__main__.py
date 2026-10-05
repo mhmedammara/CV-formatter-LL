@@ -16,14 +16,15 @@ from pathlib import Path
 from . import __version__, contenu, fonts
 from .anonymisation import anonymize, initials
 from .config import DATA_DIR, DEFAULT_EFFORT, DEFAULT_MODEL, DEFAULT_OUTPUT_DIR, EFFORT_CHOICES, PROJECT_ROOT, TEMPLATE_PATH
-from .controle import CONTROLE_VERSION, apply_verdicts, fingerprint, run_cross_check, verdicts_from_json, verdicts_to_json
+from .controle import CONTROLE_VERSION, apply_verdicts, fingerprint, photo_verdict, run_cross_check, verdicts_from_json, verdicts_to_json
 from .export_pdf import export_pdfs
 from .extraction import api_key_available, extract_cv, make_client
-from .pdf_source import SUPPORTED_SUFFIXES, SourceDocument, load_source, save_photo
+from .pdf_source import SUPPORTED_SUFFIXES, SourceDocument, load_source, save_photo, square_photo
 from .rapport import CVReport, write_report
 from .render_pptx import display_name, render_cv
 from .schema import CV
 from .verification import verify
+from .visage import FaceCheck, check_face
 
 
 @dataclass
@@ -104,6 +105,27 @@ def load_stored(job: Job) -> None:
         except Exception as exc:
             job.report.warnings.append(f"JSON existant illisible, ignoré ({exc})")
             job.stored, job.cv = None, None
+
+
+def photo_decision(local: FaceCheck, llm_ok: bool | None, llm_why: str, edited: bool) -> tuple[bool, str | None]:
+    """Garde-t-on la photo choisie ? Renvoie (garder, avertissement éventuel).
+
+    Détection locale d'un visage (YuNet) + avis du modèle (contre-vérification). Un logo dans le
+    cadre photo est pire qu'une absence de photo : sans visage détecté ni confirmé, la photo est
+    retirée (sauf JSON corrigé à la main, où elle est gardée et signalée)."""
+    why = f" ({llm_why})" if llm_why else ""
+    if local.found is True:
+        if llm_ok is False:
+            return True, f"le modèle doute qu'il s'agisse d'un visage{why}, mais un visage est détecté : vérifier"
+        return True, None
+    if llm_ok is True:
+        return True, f"{local.detail} automatiquement, mais le modèle confirme un visage : vérifier"
+    if edited:
+        return True, f"{local.detail} — conservée car le JSON a été modifié à la main : vérifier"
+    if local.found is None and llm_ok is None:
+        return True, f"photo non contrôlée ({local.detail}) : vérifier"
+    reason = local.detail if local.found is False else f"le modèle indique que ce n'est pas un visage{why}"
+    return False, f"photo retirée ({reason}) — voir la vignette dans le rapport"
 
 
 def cached_controle(job: Job) -> dict | None:
@@ -283,10 +305,28 @@ def run(args: argparse.Namespace) -> int:
                 report.photo = "retirée (anonymisation)"
             elif checked.photo_candidate and 1 <= checked.photo_candidate <= len(source.candidates):
                 candidate = source.candidates[checked.photo_candidate - 1]
-                photo_path = save_photo(candidate, photo_dir / f"{job.path.stem}.jpg")
-                report.photo = f"reprise du CV (page {candidate.page + 1})"
+                where = f"image n° {candidate.index}, page {candidate.page + 1}"
+                saved = save_photo(candidate, photo_dir / f"{job.path.stem}.jpg")
+                report.photo_file = saved
+                local = check_face(square_photo(candidate.image))
+                cached = cached_controle(job)
+                llm_ok, llm_why = photo_verdict(verdicts_from_json(cached["verdicts"])) if cached else (None, "")
+                keep, warning = photo_decision(local, llm_ok, llm_why, edited)
+                if keep:
+                    photo_path = saved
+                    report.photo = f"reprise du CV ({where}) — {local.detail or 'non contrôlée'}"
+                else:
+                    report.photo_rejected = True
+                    report.photo = f"retirée : l'image choisie ({where}) ne semble pas être un visage"
+                if warning:
+                    report.warnings.append(f"Photo : {warning}")
             elif source.candidates:
                 report.photo = f"aucune retenue ({len(source.candidates)} image(s) écartée(s) : pas une photo du consultant)"
+                faces = [c for c in source.candidates if check_face(square_photo(c.image)).found]
+                if faces:
+                    report.warnings.append(
+                        f"Photo : {len(faces)} image(s) écartée(s) contiennent un visage — vérifier qu'il ne manque pas la photo du consultant"
+                    )
             else:
                 report.photo = "aucune photo dans le CV"
 

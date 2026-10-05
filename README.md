@@ -41,9 +41,9 @@ PowerPoint (ou, à défaut, LibreOffice) doit être installé pour produire les 
 
 ### Au quotidien
 
-1. Télécharger les CV depuis Google Drive (dossier `drive-download-…` ou `.zip`) dans le dossier du projet.
-2. Double-cliquer sur **`Formater les CV.bat`** (le `drive-download-*` le plus récent est traité ; on peut
-   aussi glisser-déposer des fichiers ou dossiers sur le `.bat`).
+1. Déposer les CV (PDF, Word, images, exports LinkedIn « Enregistrer au format PDF », ou un `.zip` Google
+   Drive) dans le dossier **`Input`** du projet (créé automatiquement au premier lancement).
+2. Double-cliquer sur **`Formater les CV.bat`** (on peut aussi glisser-déposer des fichiers ou dossiers sur le `.bat`).
 3. Résultats dans **`sortie/`** :
    - `CV Logiclever - Prénom NOM.pptx` (modifiable) et `.pdf` (à envoyer) ;
    - **`rapport.md`** : pour chaque CV, ce qui a été retiré, ce qui est à vérifier, comment la pastille
@@ -60,7 +60,7 @@ python -m cv_formatter [dossiers | fichiers | .zip] [options]
 
 | Option | Effet |
 |---|---|
-| *(aucune entrée)* | traite le dossier ou `.zip` `drive-download-*` le plus récent du projet |
+| *(aucune entrée)* | traite le dossier `Input` du projet (CV et `.zip` qu'il contient) |
 | `--anonymiser` | CV anonyme : initiales, ni photo, ni e-mail/téléphone/LinkedIn ; nom retiré du texte, des noms de fichiers et des métadonnées |
 | `--sans-coordonnees` | retire e-mail, téléphone, localisation et LinkedIn (nom et photo conservés) |
 | `--pages-max N` | nombre de pages maximal (défaut : 1 page si le CV d'origine tient sur une page, sinon pages de suite réservées aux expériences) |
@@ -127,10 +127,21 @@ tant que le CV source n'a pas changé.
 - **Consigne** (`SYSTEM_PROMPT`) : ne rien inventer ni déduire ; reprendre le texte **mot pour mot** (seules
   corrections permises : fautes évidentes, accents cassés, casse, ponctuation) ; tout en français (traduction
   fidèle si besoin, noms propres et outils conservés) ; le texte visible prime sur les liens ; classer
-  rigoureusement alternances et stages.
+  rigoureusement alternances et stages ; ne jamais présenter un souhait (« je cherche… ») comme une compétence.
+- **Employeur et client** (section dédiée de la consigne) : l'employeur est l'organisation nommée dans le bloc de
+  l'expérience (ou le titre de rubrique qui regroupe ses missions), jamais celle de l'en-tête, du titre, du logo,
+  des coordonnées ou du pied de page — un CV mis en forme par une ESN (Logiclever comprise) ne fait pas de cette
+  ESN l'employeur des expériences listées. Le client n'est renseigné que si le CV le distingue explicitement
+  (« Client : B », « B (via A) », ligne client sous « A - poste »). Freelance : client = l'entreprise de la mission.
+  Plusieurs missions non datées sous un même emploi : une seule entrée, clients listés, intitulés de mission en
+  sous-titres ; un poste qui a ses propres dates reste une entrée séparée.
+- **Exports LinkedIn** : `pdf_source.linkedin_roles` lit la structure entreprise → postes d'après les tailles de
+  police (LinkedIn n'écrit le nom de l'entreprise qu'une fois au-dessus de tous ses postes) ; elle est fournie au
+  modèle et sert de contrôle (cf. 3.3).
 - `reasoning={"effort": "high"}`, `store=False` (pas de conservation côté OpenAI).
 - **Cache** : le résultat est enregistré dans `sortie/_donnees/<nom du fichier>.json` avec l'empreinte SHA-256
-  du CV source ; il n'est ré-extrait que si le CV change (ou avec `--forcer`).
+  du CV source ; il est ré-extrait si le CV change, avec `--forcer`, ou quand `EXTRACTION_VERSION` change
+  (nouvelle consigne) — sauf JSON corrigé à la main, dont les corrections priment.
 
 ### 3.3 Garde-fou n°1 : contrôle déterministe — `verification.py`
 
@@ -141,7 +152,10 @@ Chaque information extraite est recherchée dans le texte du CV d'origine (casse
 | Tout **nombre** (date, %, montant, effectif) doit exister dans le CV | « 7 équipes » alors que le CV dit 2 |
 | Tout **sigle**, mot en **CamelCase**, **nom propre** en milieu de phrase doit exister | une certification « PMP » absente du CV |
 | **E-mail** présent dans le texte visible ; **téléphone** (9 derniers chiffres) ; **LinkedIn** dans le texte ou les liens | un e-mail tiré d'un lien qui n'est pas celui du candidat |
-| Années de début/fin présentes dans la période écrite | une date décalée d'un an |
+| Années de début/fin présentes dans la période écrite ; dates relues par le code (`contenu.parse_period`) | une date décalée d'un an ; « Jan – Déc 2021 » lu « 2021 → 2021 » |
+| Employeur / client nommés ailleurs que dans l'en-tête (nom, titre), les e-mails/URL et les pieds de page répétés (`SourceDocument.body_text`) ; nom d'entreprise contrôlé mot par mot, premier mot compris | « Logiclever » pris dans le titre « Consultant confirmé Logiclever » → employeur retiré, le client devient l'entreprise |
+| Export LinkedIn : chaque poste a l'entreprise sous laquelle LinkedIn le liste | un 2e poste attribué au client cité dans sa description |
+| « Freelance » affiché seulement si le CV écrit freelance / indépendant / portage | une mention Freelance inventée |
 | CV en français : moins de 60 % des mots retrouvés → « à vérifier » | une reformulation trop libre |
 
 Tolérances voulues : correspondance approchée ≥ 0,85 (fautes corrigées : « Microsft » → « Microsoft »),
@@ -158,22 +172,25 @@ Un second appel GPT-6 Luna reçoit le PDF et la liste numérotée de toutes les 
 (poste + employeur + dates, chaque puce, chaque outil, certification, diplôme, langue, années d'expérience…)
 et répond pour chacune : `confirme`, `absent` ou `inexact`.
 
-- `absent` sur un élément atomique (puce, outil, certification, formation…) → **retiré**.
-- `absent`/`inexact` sur une **expérience entière** → seulement **signalé** : une expérience regroupe plusieurs
-  faits, et un seul attribut douteux ne doit pas la faire disparaître (les champs inventés sont retirés un à un
-  par le contrôle déterministe).
+- Les CV partent souvent sans relecture : une affirmation contestée est **retirée ou corrigée**, pas seulement
+  signalée.
+- `absent` ou `inexact` sur un élément atomique (puce, outil, certification, formation…) → **retiré**.
+- L'en-tête de chaque expérience est contrôlé champ par champ (poste, dates, employeur, client, lieu) : un champ
+  contesté est vidé ; une expérience entière n'est jamais retirée. Employeur non nommé dans l'expérience → retiré,
+  et le client (que le bloc nomme) devient l'entreprise affichée.
+- Langue et niveau sont contrôlés à part : un niveau contesté ne retire pas la langue.
 - **Nature** (alternance/stage) : affirmation formulée « le CV ne présente pas cette expérience comme une
   alternance ou un stage ». Si le modèle la juge `inexact`, l'expérience est **exclue du calcul des années**
   et signalée — elle n'est jamais retirée.
 - **Photo** : si une photo a été retenue, sa vignette est jointe et le modèle dit s'il s'agit bien d'un visage
   (et non d'un logo ou d'un badge) — utilisé par le contrôle de la photo (3.7).
-- `inexact` sur le reste → signalé « à vérifier ».
+- Un projet entier contesté → seulement signalé.
 - Les identifiants renvoyés sont normalisés (le modèle les recopie parfois avec leurs crochets, « [E0] »).
 - Les verdicts sont mis en cache dans le JSON (empreinte des données + `CONTROLE_VERSION`).
 
 Ce second regard attrape ce que le contrôle par mots-clés ne peut pas voir : une réalisation rattachée à la
-mauvaise expérience, un employeur déduit (un nom présent dans le titre mais pas pour la mission), un outil qui
-est en fait une méthode.
+mauvaise expérience, un employeur déduit (un nom présent dans le titre mais pas pour la mission), un souhait
+présenté comme une compétence.
 
 ### 3.5 Années d'expérience (pastille) — `contenu.py`
 
@@ -225,7 +242,13 @@ texte tient dans sa zone sans le vérifier à l'œil.
 Elle reste **toujours sur la page 1** : police réduite jusqu'à 75 %, puis masquage des spécialités de
 formation, puis des derniers éléments des listes les plus longues (en gardant des minimums : 5 outils,
 2 certifications, 3 domaines d'expertise…). Tout ce qui est masqué est listé dans le rapport.
-Le bloc des outils s'intitule « SI & outils » : il regroupe logiciels, plateformes et technologies.
+Blocs : Expertise, Langues, SI & outils (logiciels, plateformes, technologies — pas de méthodologies ni de normes).
+Il n'y a plus de bloc Méthode (peu d'information dans la plupart des CV). Un bloc Expertise ou SI & outils de
+moins de 3 éléments n'est pas affiché (il mettrait en avant des détails).
+
+**Expériences** : poste, puis « Employeur · Client : X · Lieu » (le client est toujours libellé), période avec
+la mention Alternance / Stage / Freelance, puis réalisations ; les intitulés de mission sont en sous-titres
+gras. La ligne « Environnement » n'est plus affichée.
 
 **Colonne gauche** (expériences) et **règle d'une page** :
 - **Une page par défaut** si le CV d'origine tient sur une page : police réduite jusqu'à 80 %, puis bénévolat
@@ -233,6 +256,8 @@ Le bloc des outils s'intitule « SI & outils » : il regroupe logiciels, platefo
   (les deux plus récentes restent complètes).
 - **Pages de suite** uniquement si le CV d'origine fait plusieurs pages (ou s'il est impossible de tenir sur une
   page même condensé), et **seulement pour les expériences** — jamais pour les compétences ou la formation.
+  Une dernière page remplie à moins de 30 % est évitée en condensant comme pour un CV d'une page (cas des
+  exports LinkedIn, qui font plusieurs pages pour peu de contenu).
   Titre « Expériences (suite) », expérience coupée avec rappel « … (suite) », titres jamais orphelins en bas de
   page, paragraphe démesuré découpé au mot.
 - Rien n'est réécrit ni résumé : on réduit, on masque des détails, et on le dit.
@@ -250,8 +275,9 @@ rangée en certification n'est affichée qu'une fois.
 2. **Choix** : le modèle reçoit les vignettes et indique laquelle est le visage du consultant (ou aucune).
 3. **Recadrage sur la zone réellement visible** : la page est rendue avec et sans l'image ; la différence des
    pixels donne exactement ce que l'on voit dans le CV — y compris pour une photo **pivotée**, rognée en
-   **cercle** ou **détourée**. L'extérieur du masque est blanchi, puis recadrage carré (haut privilégié pour un
-   portrait vertical), JPEG 800 px.
+   **cercle** ou **détourée**. Forme irrégulière (ovale, « galet ») : plus grand cercle de la forme qui contient
+   tout le visage (repéré par le détecteur), sinon forme d'origine conservée — jamais de visage coupé. Puis
+   recadrage carré (haut privilégié pour un portrait vertical), JPEG 800 px.
 4. **Contrôle du visage** (`visage.py`) : la photo retenue passe dans un détecteur de visage local (YuNet
    d'OpenCV, modèle de 230 Ko sous licence MIT fourni dans `assets/`) — gratuit, hors ligne, indépendant du LLM.
    Le visage doit être net (confiance ≥ 60 %) et assez grand (≥ 12 % de la largeur).
@@ -400,6 +426,14 @@ Le projet a été développé avec Claude Code, par étapes, chaque étape étan
   jusqu'à aujourd'hui ; arrondi à l'année supérieure ; nombre annoncé dans le CV vérifié par les dates.
 - Libellé « SI & outils » (plus juste que « SI » pour une liste qui mélange outils et technologies).
 - E-mail et LinkedIn cliquables ; photo avec marges ; anonymisation ; OCR.
+- Employeur jamais déduit de l'en-tête (cas réel : CV mis en forme par Logiclever pour un consultant venant
+  d'ailleurs) ; présentation « Employeur · Client : X » ; exports LinkedIn ; bloc Méthode et ligne Environnement
+  supprimés ; dossier `Input`.
+
+10. **Employeur / client** testé sur 15 CV (dont 5 aux présentations variées et 2 exports LinkedIn) : tous les
+    couples employeur / client justes ; l'ancienne extraction fautive (employeur « Logiclever ») est corrigée par
+    chacun des deux garde-fous pris isolément. Non-régression : pastilles d'expérience des 8 CV d'origine
+    identiques.
 
 8. **Contrôle de la photo** testé avec un CV fictif dont la seule image est un badge de certification choisi à
    tort comme photo : le détecteur local ne trouve aucun visage, le modèle répond « badge, pas une photographie de
@@ -442,8 +476,8 @@ et l'anonymisation.
 - Photo incrustée dans un CV **entièrement scanné** (une seule image par page) : non extraite.
 - Les noms d'entreprise en MAJUSCULES restent en majuscules (les remettre en casse normale risquerait de les
   déformer : « BNP PARIBAS » → « Bnp Paribas »).
-- Un employeur ou un outil déduit par le modèle mais présent ailleurs dans le CV passe le contrôle
-  déterministe : c'est la contre-vérification qui le signale (« à vérifier »).
+- Un employeur cité seulement dans un pied de page d'une page unique (non répété) n'est pas repéré par le
+  contrôle déterministe : la consigne et la contre-vérification le traitent.
 - L'export PDF de qualité nécessite PowerPoint sous Windows (LibreOffice en secours, rendu légèrement différent).
 
 ---

@@ -14,7 +14,7 @@ les choix qui ont été faits, et la logique suivie à chaque étape, pour pouvo
 
 ## Sommaire
 
-1. [Utilisation (équipe commerciale)](#1-utilisation-équipe-commerciale)
+1. [Utilisation (équipe commerciale)](#1-utilisation-équipe-commerciale) — sur le poste, ou [en ligne](#version-en-ligne-google-cloud-run)
 2. [Vue d'ensemble : comment ça marche](#2-vue-densemble--comment-ça-marche)
 3. [Le détail de chaque étape](#3-le-détail-de-chaque-étape)
 4. [Choix de conception et raisons](#4-choix-de-conception-et-raisons)
@@ -29,7 +29,18 @@ les choix qui ont été faits, et la logique suivie à chaque étape, pour pouvo
 
 ## 1. Utilisation (équipe commerciale)
 
-### Installation (une seule fois par poste)
+### Version en ligne (Google Cloud Run)
+
+Rien à installer : on ouvre l'adresse du service, on se connecte avec son compte Google **@logiclever.com**, on
+dépose les CV (PDF, Word, images ou `.zip` d'un dossier Drive), on choisit la version nominative, anonyme ou les
+deux, puis on télécharge chaque PDF et PowerPoint, ou tout le lot en `.zip`, avec le détail du contrôle affiché
+pour chaque CV. Les lots restent dans l'historique 30 jours puis sont supprimés.
+
+Même programme que la version Windows ; le PDF y est produit par LibreOffice, calé sur le rendu de PowerPoint
+(voir [3.11](#311-rendu-pdf-sous-linux--calage-sur-powerpoint)). Déploiement, coût et administration :
+**[deploiement/README.md](deploiement/README.md)**.
+
+### Installation sur un poste Windows (une seule fois par poste)
 
 1. Installer **Python 3.11+** depuis <https://www.python.org> (cocher « Add Python to PATH »).
 2. Double-cliquer sur **`Installer.bat`** : installe les composants Python et les polices Lexend
@@ -71,6 +82,7 @@ python -m cv_formatter [dossiers | fichiers | .zip] [options]
 | `--sortie DOSSIER` | dossier de sortie (défaut : `sortie`) |
 | `--modele`, `--effort` | modèle OpenAI (défaut `gpt-6-luna`) et effort de raisonnement (défaut `high`) |
 | `--template FICHIER.pptx` | autre modèle PowerPoint (champs repérés par leurs balises `{{…}}`) |
+| `--donnees DOSSIER`, `--cache-par-empreinte`, `--photos DOSSIER` | emplacement des extractions enregistrées (rangées par empreinte du CV plutôt que par nom de fichier) et des photos — utilisés par le service en ligne |
 
 ---
 
@@ -314,7 +326,10 @@ rangée en certification n'est affichée qu'une fois.
   l'installe **pour l'utilisateur** (registre HKCU, sans droits administrateur).
 - **PowerPoint** (COM, une seule session pour le lot) enregistre le **PDF**, puis ré-enregistre le **PPTX avec les
   polices complètes intégrées** : le PowerPoint s'affiche correctement même sur un poste sans Lexend.
-  LibreOffice sert de secours.
+- **Sans PowerPoint** (serveur Linux, ou poste sans PowerPoint) : **LibreOffice**, à partir d'une copie calée sur
+  le rendu de PowerPoint (3.11), puis polices intégrées au PPTX par l'outil lui-même, au format EOT des fichiers
+  `ppt/fonts/*.fntdata` (`fonts.embed_in_pptx`). Vérifié avec une police absente du poste : PowerPoint l'affiche
+  depuis le PPTX, dans ses quatre graisses.
 
 ### 3.9 Anonymisation — `anonymisation.py`
 
@@ -327,7 +342,60 @@ conservés (pratique habituelle d'un dossier de compétences).
 
 `rapport.md`, un bloc par CV : fichiers produits, origine de l'extraction, contre-vérification, photo, calcul
 de la pastille, sections non reprises (hobbies, « À propos »…), ajustements de mise en page, avertissements,
-**éléments retirés** et **éléments à vérifier** avec la raison de chacun.
+**éléments retirés** et **éléments à vérifier** avec la raison de chacun. `rapport.json` : même contenu, structuré
+(affiché par la page web).
+
+### 3.11 Rendu PDF sous Linux : calage sur PowerPoint — `libreoffice.py`
+
+Sur le serveur (Linux), il n'y a pas de PowerPoint : le PDF est produit par LibreOffice. Le PPTX, lui, est
+**identique octet pour octet** à celui produit sous Windows (la mise en page ne dépend pas du système) ; seul le
+moteur qui le transforme en PDF change. Or LibreOffice ne place pas le texte comme PowerPoint. Mesuré sur les
+14 CV de test, sans correction :
+
+| Écart LibreOffice brut / PowerPoint | Cause |
+|---|---|
+| texte jusqu'à 0,8 % plus étroit : une ligne pleine accueille un mot de plus, tout ce qui suit remonte d'une ligne (4 mm) | tailles arrondies au 1/100 mm (et non au 1/600 de pouce) |
+| première ligne de chaque zone 0,1 à 0,6 mm plus bas, interligne arrondi (jusqu'à 0,8 mm cumulés en bas de colonne) | interligne « indépendant de la police » de LibreOffice, ligne de base à 80 % de la hauteur de police |
+| puces 0,23 mm trop hautes ; police de remplacement sans Arial | puce placée avec les métriques de sa propre police |
+| texte de la pastille 1,4 mm trop bas | marge interne des rectangles à coins arrondis |
+
+**Méthode.** Une diapositive de calibrage, construite avec le code de production (mêmes zones, styles et
+interlignes que les CV, 6,5 à 37 pt), est rendue par PowerPoint et par LibreOffice ; les lignes de base sont
+relevées dans les deux PDF. On en tire :
+- **la position de la ligne de base PowerPoint** selon l'interligne (`config.POWERPOINT_BASELINE`, de 0,84 à
+  1,04 em), puis le modèle complet (interligne 1,2 × taille × facteur, espaces avant en points entiers, ancrage
+  haut / milieu / bas) : validé sur les PDF PowerPoint des 14 CV, **1 023 lignes à 0,044 mm près** ;
+- **la règle de LibreOffice** pour un interligne exact : ligne de base = haut de ligne + hauteur − (hauteur de
+  police − 80 %), au 1/100 mm ; conversion des points en 1/100 mm identique à celle de son code source.
+
+**Correction.** Le PDF est produit à partir d'une **copie** du PPTX (le PPTX livré, modifiable, n'est pas touché) :
+chaque ligne calculée par le modèle de mise en page — celui qui a dimensionné les zones — devient un paragraphe
+d'interligne exact, calculé pour que sa ligne de base tombe là où PowerPoint la place ; la puce devient un
+caractère Arial dont l'espacement porte le texte au retrait ; la marge des coins arrondis est prise en compte ;
+Liberation Sans (métriques d'Arial) est installée dans l'image.
+
+**Résultat** (14 CV de test, PDF LibreOffice sous Linux comparés aux PDF PowerPoint sous Windows) :
+
+| | Avant calage | Après calage |
+|---|---|---|
+| Lignes de base | +0,30 mm en moyenne, jusqu'à 0,66 mm | **0,002 mm en moyenne, 0,05 mm au plus** |
+| Puces | 0,23 mm trop hautes | **0,04 mm au plus** |
+| Pastille, titres de section | 1,4 mm / 0,24 mm | **< 0,05 mm** |
+| Césure | lignes et blocs décalés d'une ligne | **96 % des lignes identiques** (voir ci-dessous) |
+
+Les 4 % restants sont des lignes où PowerPoint loge un mot de plus que le modèle, qui garde 1 % de marge de
+largeur (ou coupe après un trait d'union : « Île-/de-France ») : sous Linux, la césure est celle que le modèle a
+prévue en dimensionnant la zone, sans débordement ni espace laissé vide. Les fins de ligne peuvent aussi différer
+de quelques dixièmes de millimètre (texte LibreOffice un peu plus étroit), sans effet sur la mise en page
+(texte aligné à gauche, césure imposée).
+
+**Contrôles** : `tests/test_libreoffice.py` (structure et arithmétique de la copie calée, partout) et
+`tests/test_rendu_linux.py` (rendu LibreOffice réel comparé au modèle PowerPoint, ligne par ligne, dans l'image
+Docker : écart maximal mesuré 0,011 mm). À relancer après toute mise à jour de l'image. Pour recalibrer (nouvelle
+version de PowerPoint ou de LibreOffice) : `outils/calibrage_libreoffice.py`.
+
+Autres différences Linux, vérifiées : OCR par **Tesseract** (français) au lieu de l'OCR de Windows — 96 % des mots
+d'un CV scanné retrouvés, contre 97 % ; conversion Word → PDF par LibreOffice Writer.
 
 ---
 
@@ -351,6 +419,9 @@ de la pastille, sections non reprises (hobbies, « À propos »…), ajustements
 | Contrôle de la photo par un détecteur local + l'avis du modèle | Deux regards indépendants ; un logo ou un badge ne finit jamais dans le cadre photo | Faire confiance au seul choix du modèle |
 | Liens posés sur la zone de texte | Cliquables dans le PDF sans le soulignement bleu imposé par PowerPoint | Lien sur le texte (souligné, hors charte) |
 | OCR Windows puis Tesseract | Déjà présent sur tous les postes Windows, français, hors ligne, gratuit | Service d'OCR en ligne |
+| PDF sous Linux : copie du PPTX calée sur PowerPoint, rendue par LibreOffice | Pas de PowerPoint sous Linux ; mêmes positions que PowerPoint à 0,05 mm près, PPTX livré inchangé | LibreOffice sans calage (lignes décalées, césure différente) ; dessiner le PDF soi-même (second moteur de rendu à maintenir) ; conversion par Microsoft 365 (compte et données hors de Google Cloud) |
+| En ligne : Cloud Run (service web + job par lot), bucket monté comme dossier | Rien ne tourne entre deux lots (coût quasi nul) ; le job continue si l'on ferme la page ; LibreOffice, polices et OCR dans l'image | Cloud Functions (ni LibreOffice ni polices, durée limitée) ; machine virtuelle permanente (payante même inutilisée) |
+| Accès par IAP, comptes du domaine | Connexion Google existante, aucun mot de passe à gérer, gratuit, sans équilibreur de charge | Page publique avec mot de passe ; équilibreur de charge (≈ 18 €/mois) |
 
 ---
 
@@ -390,12 +461,22 @@ cv_formatter/
   contenu.py       règles métier : années d'expérience, dates, tri, typographie, styles des paragraphes
   layout.py        mesure du texte (métriques Lexend) et modèle de paragraphes
   render_pptx.py   remplissage du modèle : en-tête, colonne droite, pagination, pages de suite
-  export_pdf.py    PPTX → PDF via PowerPoint (polices intégrées) ou LibreOffice
+  export_pdf.py    PPTX → PDF via PowerPoint (polices intégrées) ou LibreOffice calé
+  libreoffice.py   copie du PPTX calée sur le rendu de PowerPoint, pour LibreOffice (3.11)
   visage.py        contrôle de la photo : détection de visage (YuNet / OpenCV)
-  anonymisation.py, rapport.py, fonts.py, config.py
+  fonts.py         polices Lexend : installation (Windows, Linux), intégration au PPTX (EOT)
+  anonymisation.py, rapport.py, config.py
+  web/             version en ligne : app.py (page et API), lots.py (lots et fichiers), traitement.py (job
+                   Cloud Run), lancement.py (lancement du job), static/index.html (page)
   assets/          modèle nettoyé, polices Lexend (OFL), modèle de détection de visage (MIT)
 tests/
   test_cv_formatter.py   tests de non-régression (données fictives, aucun vrai CV)
+  test_libreoffice.py    copie calée et polices intégrées
+  test_web.py            service web et job (sans appel à OpenAI ni à Google Cloud)
+  test_rendu_linux.py    rendu LibreOffice réel comparé à PowerPoint (dans l'image Docker)
+outils/calibrage_libreoffice.py   mesure et recalibrage du rendu PowerPoint / LibreOffice
+deploiement/           script de déploiement Cloud Run et guide (deploiement/README.md)
+Dockerfile             image Linux (LibreOffice, Tesseract, polices) du service et du job
 ```
 
 | Pour changer… | Où |
@@ -412,6 +493,9 @@ tests/
 | La position et la taille de la photo | `config.py` (`PHOTO_X`, `PHOTO_SIZE`, `PHOTO_BOTTOM`, `PHOTO_GAP`) |
 | L'alignement et l'espacement des titres de section | `config.py` (`HEADER_TEXT_OFFSET`, `HEADER_TO_CONTENT`, `SECTION_GAP`) et `render_pptx.py` (`_align_header`) |
 | Le modèle PowerPoint | `assets/modele_cv_logiclever.pptx` (garder les balises `{{…}}`) ou `--template` |
+| Un nouvel interligne dans les styles | le mesurer sur PowerPoint (`outils/calibrage_libreoffice.py`) et l'ajouter à `config.POWERPOINT_BASELINE` (un test le rappelle) |
+| Le calage LibreOffice | `libreoffice.py` (règle de LibreOffice, puces, formes) ; contrôle : `tests/test_rendu_linux.py` |
+| La région, le domaine autorisé, la durée de conservation en ligne | paramètres de `deploiement/deployer.sh` |
 
 ---
 
@@ -473,12 +557,24 @@ Le projet a été développé avec Claude Code, par étapes, chaque étape étan
     pour 13 CV sur 14 (le dernier, qui ne tenait qu'à 0,05 mm près, masque les puces d'une expérience ancienne
     de plus, avec une police agrandie de 80 à 90 %).
 
+12. **Passage sous Linux (version en ligne)** : PPTX produits sous Linux identiques octet pour octet à ceux de
+    Windows (14/14) ; PDF LibreOffice calés sur PowerPoint (3.11) : 0,002 mm d'écart moyen sur 1 074 lignes ;
+    PPTX produits sous Linux rouverts par PowerPoint : rendu identique à 0,000 mm près ; rapports identiques ;
+    OCR et Word vérifiés ; chaîne complète (dépôt web, job, téléchargements, archive) testée en conteneur sur les
+    14 CV, en versions nominative et anonyme (22 s grâce au cache, aucun appel à l'API) ; consommation mesurée :
+    300 Mio de mémoire, d'où un job à 1 vCPU / 2 Gio.
+
 **Tests automatiques** (données fictives, aucun vrai CV) : `python -m pytest -q` après
-`pip install -r requirements-dev.txt`. Ils couvrent le contrôle anti-invention (inventions retirées, vraies
+`pip install -r requirements-cloud.txt -r requirements-dev.txt` (90 tests, dont 2 réservés à l'image Linux).
+Ils couvrent le contrôle anti-invention (inventions retirées, vraies
 informations gardées malgré les tolérances), l'application des verdicts (y compris identifiants entre
 crochets), les années d'expérience, les décisions sur la photo, la détection de visage, la typographie, la mesure
 du texte (règles de PowerPoint comprises), le rendu (une page, aucun champ `{{…}}` restant, liens, pages de suite
-réservées aux expériences, alignement des titres de section et des coordonnées) et l'anonymisation.
+réservées aux expériences, alignement des titres de section et des coordonnées), l'anonymisation, la copie calée
+pour LibreOffice et les polices intégrées, le service web (dépôts, sécurité des chemins, historique) et le
+traitement d'un lot de bout en bout. Sous Linux (image Docker), ils comparent en plus le rendu LibreOffice réel à
+PowerPoint, ligne par ligne :
+`docker run --rm -v "${PWD}:/app" -w /app cv-formatter sh -c "pip install --user -q pytest httpx && python -m pytest -q"`.
 
 **Comment vérifier après une modification** :
 1. `python -m pytest -q` (tests automatiques, quelques secondes) ;
@@ -491,7 +587,11 @@ réservées aux expériences, alignement des titres de section et des coordonné
 ## 8. Coût, confidentialité, sécurité
 
 - **Coût** : environ **0,01 $ par CV** avec `gpt-6-luna` (extraction + contre-vérification) ; un CV déjà traité
-  n'est pas renvoyé à l'API.
+  n'est pas renvoyé à l'API. Version en ligne : quelques centimes par mois pour Google Cloud (tout s'arrête entre
+  deux lots ; détail dans [deploiement/README.md](deploiement/README.md#coût)).
+- **Version en ligne** : accès réservé aux comptes Google du domaine (IAP) ; données à Paris (europe-west9) ; lots
+  et cache des extractions supprimés automatiquement après 30 jours ; clé OpenAI dans Secret Manager, lisible par
+  le seul job de traitement ; les noms des consultants ne sont pas écrits dans les journaux.
 - **Confidentialité** : les CV sont envoyés à l'API OpenAI avec `store=False` (pas de conservation des réponses ;
   les données d'API ne servent pas à l'entraînement par défaut). Ne traiter que des CV que l'on est autorisé à
   transmettre.
@@ -507,7 +607,8 @@ réservées aux expériences, alignement des titres de section et des coordonné
   déformer : « BNP PARIBAS » → « Bnp Paribas »).
 - Un employeur cité seulement dans un pied de page d'une page unique (non répété) n'est pas repéré par le
   contrôle déterministe : la consigne et la contre-vérification le traitent.
-- L'export PDF de qualité nécessite PowerPoint sous Windows (LibreOffice en secours, rendu légèrement différent).
+- Sans PowerPoint (version en ligne), environ 4 % des lignes sont coupées un mot plus tôt que dans PowerPoint
+  (voir 3.11) ; les positions, elles, sont identiques à 0,05 mm près.
 
 ---
 

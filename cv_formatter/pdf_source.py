@@ -19,7 +19,7 @@ from numpy.typing import NDArray
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from . import ocr
-from .export_pdf import libreoffice
+from .export_pdf import libreoffice, soffice_convert
 from .visage import find_face
 
 PDF_SUFFIXES = {".pdf"}
@@ -203,11 +203,10 @@ def _office_to_pdf(path: Path) -> bytes:
     soffice = libreoffice()
     with tempfile.TemporaryDirectory() as tmp:
         if soffice:
-            subprocess.run(
-                [soffice, "--headless", "--convert-to", "pdf", "--outdir", tmp, str(path)],
-                capture_output=True,
-                timeout=180,
-            )
+            try:
+                soffice_convert(soffice, [path], Path(tmp), Path(tmp) / "profil", timeout=180)
+            except subprocess.TimeoutExpired:
+                pass
             produced = Path(tmp) / (path.stem + ".pdf")
             if produced.exists():
                 return produced.read_bytes()

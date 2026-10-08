@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
 import sys
+import threading
 import zipfile
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,10 +21,10 @@ from . import __version__, contenu, fonts
 from .anonymisation import anonymize, initials
 from .config import DATA_DIR, DEFAULT_EFFORT, DEFAULT_MODEL, DEFAULT_OUTPUT_DIR, EFFORT_CHOICES, INPUT_DIR, TEMPLATE_PATH
 from .controle import CONTROLE_VERSION, apply_verdicts, fingerprint, fingerprint_data, photo_verdict, run_cross_check, verdicts_from_json, verdicts_to_json
-from .export_pdf import export_pdfs
+from .export_pdf import embed_fonts, export_pdfs
 from .extraction import EXTRACTION_VERSION, api_key_available, extract_cv, make_client
 from .pdf_source import SUPPORTED_SUFFIXES, SourceDocument, load_source, save_photo, square_photo
-from .rapport import CVReport, write_report
+from .rapport import CVReport, write_report, write_report_json
 from .render_pptx import display_name, render_cv
 from .schema import CV
 from .verification import Finding, verify
@@ -31,6 +34,8 @@ if TYPE_CHECKING:
     from openai import OpenAI
 
 Stored = dict[str, Any]  # contenu d'un fichier sortie/_donnees/*.json (_meta, cv, controle)
+# Avancement du lot (service web) : (étape, nombre de CV traités, nombre de CV de l'étape).
+Progress = Callable[[str, int, int], None]
 
 
 @dataclass
@@ -61,6 +66,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sans-controle", action="store_true", help="Désactive la contre-vérification par un second appel au modèle")
     parser.add_argument("--pages-max", type=int, default=None, metavar="N", help="Nombre de pages maximal (défaut : 1 page si le CV d'origine tient sur une page ; sinon pages de suite réservées aux expériences)")
     parser.add_argument("--sans-pdf", action="store_true", help="Ne génère que les PPTX")
+    parser.add_argument("--donnees", type=Path, default=None, help="Dossier des extractions enregistrées (défaut : sortie/_donnees)")
+    parser.add_argument("--cache-par-empreinte", action="store_true", help="Extractions enregistrées sous l'empreinte SHA-256 du CV et non sous son nom (cache partagé du service web)")
+    parser.add_argument("--photos", type=Path, default=None, help="Dossier des photos recadrées (défaut : <données>/photos)")
     parser.add_argument("--template", type=Path, default=None, help="Modèle PowerPoint à utiliser")
     parser.add_argument("--ouvrir", action="store_true", help="Ouvre le dossier de sortie à la fin")
     parser.add_argument("--version", action="version", version=f"cv_formatter {__version__}")
@@ -73,22 +81,46 @@ def default_input() -> Path:
     return INPUT_DIR
 
 
+ZIP_MAX_FILES = 200
+ZIP_MAX_BYTES = 400 * 1024 * 1024  # décompressé : une archive piégée ne doit pas remplir le disque (en mémoire sur Cloud Run)
+
+
 def _unzip(archive_path: Path, output: Path) -> list[Path]:
+    """Extrait les CV d'une archive (export Google Drive), et seulement eux, dans des limites raisonnables."""
     target = output / "_entree_zip" / archive_path.stem
     with zipfile.ZipFile(archive_path) as archive:
-        archive.extractall(target)
-    return sorted(p for p in target.rglob("*") if p.suffix.lower() in SUPPORTED_SUFFIXES and not p.name.startswith("~$"))
+        members = [
+            m for m in archive.infolist()
+            if not m.is_dir() and Path(m.filename).suffix.lower() in SUPPORTED_SUFFIXES
+            and not any(part.startswith((".", "__MACOSX", "~$")) for part in Path(m.filename).parts)
+        ]
+        if len(members) > ZIP_MAX_FILES or sum(m.file_size for m in members) > ZIP_MAX_BYTES:
+            raise ValueError(f"archive {archive_path.name} trop volumineuse (plus de {ZIP_MAX_FILES} fichiers ou de {ZIP_MAX_BYTES // 2**20} Mo)")
+        for member in members:
+            archive.extract(member, target)  # chemins absolus et « .. » neutralisés par zipfile
+    return sorted(p for p in target.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES)
 
 
-def collect_files(inputs: list[Path], output: Path) -> list[Path]:
+def collect_files(inputs: list[Path], output: Path, problems: list[CVReport] | None = None) -> list[Path]:
+    """CV à traiter. Une archive illisible ou trop volumineuse est ignorée et signalée dans `problems`."""
     files: list[Path] = []
+
+    def unzip(archive: Path) -> list[Path]:
+        try:
+            return _unzip(archive, output)
+        except (ValueError, OSError, zipfile.BadZipFile) as exc:
+            print(f"  ! Archive ignorée : {archive.name} ({exc})")
+            if problems is not None:
+                problems.append(CVReport(source=archive.name, error=f"archive ignorée : {exc}"))
+            return []
+
     for item in inputs:
         if item.is_dir():
             files += sorted(p for p in item.rglob("*") if p.suffix.lower() in SUPPORTED_SUFFIXES and not p.name.startswith("~$"))
             for archive in sorted(item.rglob("*.zip")):  # export Google Drive déposé tel quel
-                files += _unzip(archive, output)
+                files += unzip(archive)
         elif item.suffix.lower() == ".zip" and item.exists():
-            files += _unzip(item, output)
+            files += unzip(item)
         elif item.exists() and item.suffix.lower() in SUPPORTED_SUFFIXES:
             files.append(item)
         else:
@@ -177,24 +209,56 @@ def save_stored(job: Job) -> None:
     job.data_file.write_text(json.dumps(job.stored, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def run(args: argparse.Namespace) -> int:
+def make_jobs(files: list[Path], data_dir: Path, by_hash: bool) -> list[Job]:
+    """Un CV par fichier. Extraction enregistrée sous le nom du fichier, ou sous l'empreinte de son contenu
+    (cache partagé du service web : deux « CV.pdf » différents ne se mélangent pas, un même CV déposé
+    deux fois n'est extrait qu'une fois)."""
+    jobs: list[Job] = []
+    seen: dict[str, Job] = {}
+    for f in files:
+        if not by_hash:
+            jobs.append(Job(f, CVReport(source=f.name), data_dir / f"{f.stem}.json"))
+            continue
+        digest = hashlib.sha256(f.read_bytes()).hexdigest()
+        if digest in seen:
+            seen[digest].report.warnings.append(f"Même fichier déposé aussi sous le nom « {f.name} » : traité une seule fois.")
+            continue
+        seen[digest] = Job(f, CVReport(source=f.name), data_dir / f"{digest}.json")
+        jobs.append(seen[digest])
+    return jobs
+
+
+def run(args: argparse.Namespace, progress: Progress | None = None) -> int:
     reconfigure = getattr(sys.stdout, "reconfigure", None)  # absent si la sortie est redirigée vers un objet quelconque
     if callable(reconfigure):
         reconfigure(encoding="utf-8", errors="replace")
     output: Path = args.sortie.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    data_dir = DATA_DIR
+    data_dir = args.donnees.resolve() if args.donnees else DATA_DIR
+    photo_dir = args.photos.resolve() if args.photos else data_dir / "photos"
+    lock = threading.Lock()  # les appels API se terminent dans des fils parallèles
+
+    def step(name: str, done: int, total: int) -> None:
+        if progress is not None:
+            with lock:
+                progress(name, done, total)
+
     template = (args.template or TEMPLATE_PATH).resolve()
     if not template.exists():
         print(f"Modèle introuvable : {template}")
         return 2
 
     inputs = args.entrees or [default_input()]
-    files = collect_files(inputs, output)
+    problems: list[CVReport] = []  # archives ignorées, signalées dans le rapport
+    files = collect_files(inputs, output, problems)
     if not files:
         print("Aucun CV (PDF, DOCX, image ou .zip) trouvé dans :", ", ".join(str(i) for i in inputs))
         if not args.entrees:
             print(f"Déposez les CV à traiter dans le dossier {INPUT_DIR} puis relancez.")
+        if problems:
+            write_report(problems, output / "rapport.md", "aucun CV traité")
+            write_report_json(problems, output / "rapport.json", "aucun CV traité")
+            return 1
         return 2
 
     print(f"CV Formatter Logiclever {__version__} — {len(files)} CV à traiter")
@@ -204,12 +268,13 @@ def run(args: argparse.Namespace) -> int:
     except Exception as exc:
         print(f"  ! Polices Lexend non installées ({exc}) : le PDF utilisera une police de remplacement.")
 
-    jobs = [Job(f, CVReport(source=f.name), data_dir / f"{f.stem}.json") for f in files]
+    jobs = make_jobs(files, data_dir, args.cache_par_empreinte)
     has_key = api_key_available()
     client: OpenAI | None = None
 
     # 1. Lecture des sources (séquentiel : PyMuPDF n'est pas multi-thread).
-    for job in jobs:
+    for index, job in enumerate(jobs):
+        step("lecture", index, len(jobs))
         try:
             # Photos toujours détectées : l'extraction mise en cache doit rester valable sans --anonymiser.
             job.source = load_source(job.path)
@@ -242,8 +307,17 @@ def run(args: argparse.Namespace) -> int:
     if to_extract:
         client = api = make_client()
         print(f"  Extraction de {len(to_extract)} CV avec {args.modele} (effort {args.effort})…")
+        extracted_count = [0]
+        step("extraction", 0, len(to_extract))
 
         def extract(job: Job) -> None:
+            try:
+                extract_one(job)
+            finally:
+                extracted_count[0] += 1
+                step("extraction", extracted_count[0], len(to_extract))
+
+        def extract_one(job: Job) -> None:
             source = job.source
             if source is None:
                 return
@@ -285,8 +359,17 @@ def run(args: argparse.Namespace) -> int:
     if pending:
         checker = client or make_client()
         print(f"  Contre-vérification de {len(pending)} CV…")
+        checked_count = [0]
+        step("controle", 0, len(pending))
 
         def cross(job: Job) -> None:
+            try:
+                cross_one(job)
+            finally:
+                checked_count[0] += 1
+                step("controle", checked_count[0], len(pending))
+
+        def cross_one(job: Job) -> None:
             if job.source is None or job.cv is None or job.stored is None:
                 return
             try:
@@ -308,8 +391,8 @@ def run(args: argparse.Namespace) -> int:
 
     # 4. Contrôles, mise en page, PPTX.
     used_names: set[str] = set()
-    photo_dir = data_dir / "photos"
-    for job in ready:
+    for index, job in enumerate(ready):
+        step("mise_en_page", index, len(ready))
         report, source, extracted = job.report, job.source, job.cv
         if source is None or extracted is None:
             continue
@@ -350,7 +433,7 @@ def run(args: argparse.Namespace) -> int:
             elif checked.photo_candidate and 1 <= checked.photo_candidate <= len(source.candidates):
                 candidate = source.candidates[checked.photo_candidate - 1]
                 where = f"image n° {candidate.index}, page {candidate.page + 1}"
-                saved = save_photo(candidate, photo_dir / f"{job.path.stem}.jpg")
+                saved = save_photo(candidate, photo_dir / f"{job.data_file.stem}.jpg")
                 report.photo_file = saved
                 local = check_face(square_photo(candidate.image))
                 cached = cached_controle(job)
@@ -417,29 +500,38 @@ def run(args: argparse.Namespace) -> int:
         except Exception as exc:
             report.error = f"génération impossible : {type(exc).__name__}: {exc}"
 
-    # 5. PDF.
+    # 5. PDF (et polices intégrées au PPTX).
     produced = [j.pptx for j in jobs if j.pptx]
     if produced and not args.sans_pdf:
         print(f"  Export PDF de {len(produced)} CV…")
-        errors = export_pdfs(produced)
+        step("pdf", 0, len(produced))
+        export = export_pdfs(produced)
         for job in jobs:
             if job.pptx is None:
                 continue
-            if job.pptx.resolve() in errors:
-                job.report.warnings.append(f"PDF non généré : {errors[job.pptx.resolve()]}")
+            key = job.pptx.resolve()
+            job.report.warnings += [f"PDF : {note}" for note in export.notes.get(key, [])]
+            if key in export.errors:
+                job.report.warnings.append(f"PDF non généré : {export.errors[key]}")
             elif job.pptx.with_suffix(".pdf").exists():
                 job.report.pdf = job.pptx.with_suffix(".pdf")
+                job.report.pdf_engine = export.engines.get(key, "")
+    elif produced:  # sans PDF, PowerPoint n'a pas ré-enregistré les PPTX : polices intégrées ici
+        for pptx, message in embed_fonts(produced).items():
+            next(j for j in jobs if j.pptx == pptx).report.warnings.append(f"Polices non intégrées au PPTX ({message})")
 
     # 6. Rapport.
+    step("rapport", len(jobs), len(jobs))
     cross_state = "activée" if cross_enabled and has_key else ("désactivée" if not cross_enabled else "impossible (clé OpenAI absente)")
     settings = (
         f"modèle : {args.modele} (effort {args.effort}) · contre-vérification : {cross_state}"
         f" · anonymisation : {'oui' if args.anonymiser else 'non'} · le détail par CV figure ci-dessous"
     )
-    report_path = write_report([j.report for j in jobs], output / "rapport.md", settings)
+    reports = [j.report for j in jobs] + problems
+    report_path = write_report(reports, output / "rapport.md", settings)
+    write_report_json(reports, output / "rapport.json", settings)
     print()
-    for job in jobs:
-        r = job.report
+    for r in reports:
         if r.error:
             print(f"  ✗ {r.source} : {r.error}")
         else:
@@ -448,7 +540,7 @@ def run(args: argparse.Namespace) -> int:
     print(f"\nRésultats : {output}\nRapport   : {report_path}")
     if args.ouvrir and os.name == "nt":
         os.startfile(output)  # noqa: S606 — ouverture de l'explorateur
-    return 0 if all(not j.report.error for j in jobs) else 1
+    return 0 if all(not r.error for r in reports) else 1
 
 
 def main() -> None:

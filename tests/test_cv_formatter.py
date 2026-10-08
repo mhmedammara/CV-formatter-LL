@@ -25,10 +25,20 @@ from pptx.util import Emu
 from cv_formatter import contenu
 from cv_formatter.__main__ import Job, collect_files, default_input, json_edited, needs_extraction, photo_decision, safe_name
 from cv_formatter.anonymisation import anonymize, initials
-from cv_formatter.config import FONTS_DIR, INPUT_DIR, TEMPLATE_PATH
+from cv_formatter.config import (
+    FONTS_DIR,
+    HEADER_TEXT_OFFSET,
+    INPUT_DIR,
+    LEFT_X,
+    RIGHT_X,
+    TEMPLATE_PATH,
+    TEXT_INSET,
+    WIDTH_SAFETY_MARGIN,
+    cm,
+)
 from cv_formatter.controle import apply_verdicts, build_claims, fingerprint_data, photo_verdict
 from cv_formatter.extraction import EXTRACTION_VERSION
-from cv_formatter.layout import Para, Run, line_count, para_height
+from cv_formatter.layout import PT_PER_CM, Para, Run, cap_center_offset, line_count, para_height, scale, text_width
 from cv_formatter.pdf_source import SourceDocument, fix_text, load_source
 from cv_formatter.rapport import CVReport
 from cv_formatter.render_pptx import NS as XML_NS, RenderResult, render_cv, split_long_para, text_of
@@ -555,6 +565,20 @@ def test_measurement_and_split():
     assert len(pieces) > 1 and all(para_height(p, 12.44) <= 12.0 for p in pieces)
 
 
+def test_measurement_matches_powerpoint_rules():
+    # PowerPoint ne fusionne pas les espaces : « Scrum  ·  SAFe » est plus large que « Scrum · SAFe ».
+    single, double = "Scrum · SAFe", "Scrum  ·  SAFe"
+    middle = (text_width(single, "regular", 10) + text_width(double, "regular", 10)) / 2
+    width = middle * (1 + WIDTH_SAFETY_MARGIN) / PT_PER_CM + 2 * TEXT_INSET
+    assert line_count(Para([Run(single, "regular", 10)]), width) == 1
+    assert line_count(Para([Run(double, "regular", 10)]), width) == 2
+    # Insécables avant le point : une ligne coupée finit par « · » au lieu de commencer par lui.
+    assert contenu.inline_para(["Scrum", "SAFe", "Jira"])[0].text == "Scrum  ·  SAFe  ·  Jira"
+    # PowerPoint arrondit l'espace avant au point entier (1,6 -> 2 ; 8,8 -> 9) : la mesure fait de même.
+    paras = [Para([Run("x", "regular", 10)], space_before=2), Para([Run("x", "regular", 10)], space_before=11)]
+    assert [p.space_before for p in scale(paras, 0.8)] == [2.0, 9.0]
+
+
 # --- Rendu PPTX ------------------------------------------------------------------------------
 
 
@@ -637,6 +661,75 @@ def test_render_long_cv_paginates_only_experiences(tmp_path: Path):
     for slide in list(prs.slides)[1:]:
         texts = " ".join(_shape_texts(slide.shapes))
         assert "Expériences (suite)" in texts and "Formation" not in texts and "Certifications" not in texts
+
+
+def _has_text(shape: BaseShape) -> bool:
+    return isinstance(shape, Shape) and shape.has_text_frame and bool(shape.text_frame.text.strip())
+
+
+def _in_slide(group: GroupShape, shape: BaseShape) -> tuple[int, int]:
+    """Coin haut gauche (EMU, repère de la diapositive) d'un enfant d'un groupe à l'échelle 1:1."""
+    ch_off = group.element.find("p:grpSpPr/a:xfrm/a:chOff", XML_NS)
+    assert ch_off is not None
+    return group.left + shape.left - int(ch_off.get("x", "0")), group.top + shape.top - int(ch_off.get("y", "0"))
+
+
+def test_section_headers_are_aligned(tmp_path: Path):
+    """Icône calée sur la marge du texte de sa colonne et centrée sur la hauteur de capitale du titre ;
+    titre à la même distance de l'icône partout (pages de suite comprises)."""
+    cv = make_cv()
+    cv.experiences = [cv.experiences[0].model_copy(update={"realisations": [f"Réalisation numéro {i} " * 6 for i in range(12)]}) for _ in range(8)]
+    _, prs = _render(tmp_path, cv, source_pages=4)
+    margins = {cm(LEFT_X + TEXT_INSET), cm(RIGHT_X + TEXT_INSET)}
+    titles: list[str] = []
+    for slide in prs.slides:
+        for group in (sh for sh in slide.shapes if isinstance(sh, GroupShape)):
+            texts = [sh for sh in group.shapes if _has_text(sh)]
+            if not texts:  # icône des coordonnées
+                continue
+            title = texts[0]
+            assert isinstance(title, Shape)
+            icon = next(sh for sh in group.shapes if sh.shape_id != title.shape_id)
+            (ix, iy), (tx, ty) = _in_slide(group, icon), _in_slide(group, title)
+            frame = title.text_frame
+            size = frame.paragraphs[0].runs[0].font.size
+            assert size is not None
+            assert ix in margins
+            assert abs(iy + icon.height / 2 - (ty + title.height / 2) - cm(cap_center_offset(size.pt))) < 1000  # < 0,03 mm
+            assert abs(tx + frame.margin_left - ix - cm(HEADER_TEXT_OFFSET)) < 1000
+            assert frame.paragraphs[0].space_after == 0  # l'espace après du modèle faisait remonter le titre
+            titles.append(frame.text)
+    assert {"Expériences", "Compétences", "Certifications", "Formation", "Expériences (suite)"} <= set(titles)
+
+
+def test_contact_rows_are_aligned(tmp_path: Path):
+    """Texte aligné sur les titres de la colonne droite, icônes sur un même axe et centrées sur leur ligne ;
+    avec moins de lignes, le bloc reste centré au même endroit."""
+
+    def rows(cv: CV) -> list[tuple[Shape, BaseShape]]:
+        _, prs = _render(tmp_path, cv, source_pages=1)
+        shapes = list(prs.slides[0].shapes)
+        values = {v for v in cv.contact.model_dump().values() if v}
+        boxes = [sh for sh in shapes if isinstance(sh, Shape) and _has_text(sh) and sh.text_frame.text in values]
+        icons = [sh for sh in shapes if not _has_text(sh) and sh.top < cm(6.5) and cm(13.8) < sh.left < cm(15)]
+        pairs = [(box, min(icons, key=lambda i: abs(i.top + i.height / 2 - box.top - box.height / 2))) for box in boxes]
+        return sorted(pairs, key=lambda pair: pair[0].top)
+
+    full = rows(make_cv())
+    assert len(full) == 4
+    axis = [icon.left + icon.width / 2 for _, icon in full]
+    assert max(axis) - min(axis) < 1000
+    for box, icon in full:
+        size = box.text_frame.paragraphs[0].runs[0].font.size
+        assert size is not None
+        assert abs(box.left + box.text_frame.margin_left - cm(RIGHT_X + TEXT_INSET + HEADER_TEXT_OFFSET)) < 10
+        assert abs(icon.top + icon.height / 2 - (box.top + box.height / 2) - cm(cap_center_offset(size.pt))) < 1000
+
+    def center(pairs: list[tuple[Shape, BaseShape]]) -> float:
+        return (pairs[0][0].top + pairs[-1][0].top + pairs[-1][0].height) / 2
+
+    partial = rows(make_cv(contact={"email": "jean.dupont@example.com", "telephone": None, "localisation": "Lyon (69003)", "linkedin": None}))
+    assert len(partial) == 2 and abs(center(partial) - center(full)) < 1000
 
 
 # --- Anonymisation -----------------------------------------------------------------------------

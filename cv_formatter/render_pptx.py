@@ -22,6 +22,8 @@ from .config import (
     CONTENT_BOTTOM,
     CONTINUATION_HEADER_Y,
     FULL_WIDTH,
+    HEADER_TEXT_OFFSET,
+    HEADER_TO_CONTENT,
     LEFT_TOP_PAGE1,
     LEFT_WIDTH,
     LEFT_X,
@@ -32,13 +34,25 @@ from .config import (
     PHOTO_X,
     RIGHT_WIDTH,
     RIGHT_X,
-    SECTION_HEADER_HEIGHT,
+    SECTION_GAP,
     TEXT_INSET,
     WHITE,
     cm,
     emu_to_cm,
 )
-from .layout import PT_PER_CM, Block, Para, Run, box_height, fits_one_line, line_count, para_height, scale, text_width
+from .layout import (
+    PT_PER_CM,
+    Block,
+    Para,
+    Run,
+    box_height,
+    cap_center_offset,
+    fits_one_line,
+    line_count,
+    para_height,
+    scale,
+    text_width,
+)
 from .schema import CV, Certification, Experience, Formation, Langue
 
 # Élément XML de lxml : sa classe publique porte un nom « privé » (_Element) dans les annotations de lxml.
@@ -63,7 +77,6 @@ RIGHT_BLOCKS = (("expertise", "EXPERTISE"), ("langues", "LANGUES"), ("si", "SI &
 # d'éléments, le bloc n'est pas affiché. Les langues, certifications et diplômes ne sont pas concernés.
 MIN_KEYWORD_ITEMS = 3
 KEYWORD_BLOCKS = {"expertise": "Expertise", "si": "SI & outils"}
-HEADER_GAP = 0.25  # espace avant un titre de section placé dans le flux
 CONTACT_RIGHT_EDGE = 20.75
 
 
@@ -211,6 +224,10 @@ class Template:
         self.headers: dict[str, Element] = {
             text_of(el).strip(): el for el in top if el.tag == q("p:grpSp") and text_of(el).strip()
         }
+        # Titres de section alignés ; les icônes des coordonnées sont centrées sur l'axe des icônes de
+        # section (la plus large fixe l'axe).
+        icon_widths = [_align_header(group) for group in self.headers.values()]
+        self.icon_width = max(icon_widths, default=0.0)
         self.photo: Element | None = next((el for el in top if el.tag == q("p:pic")), None)
         self.icons = self._contact_icons(top)
         self._next_id = 1000
@@ -251,14 +268,71 @@ class Template:
         return copy_el
 
 
+def _header_parts(group: Element) -> tuple[Element, Element] | None:
+    """(zone du titre, icône) d'un groupe « icône + titre de section » du modèle ; None pour un autre groupe."""
+    shapes = [el for el in group if el.tag in SHAPE_TAGS]
+    titles = [el for el in shapes if el.tag == q("p:sp") and text_of(el).strip()]
+    icons = [el for el in shapes if not text_of(el).strip()]
+    return (titles[0], icons[0]) if len(titles) == 1 and len(icons) == 1 else None
+
+
+def _title_size(text_sp: Element) -> float:
+    rpr = text_sp.find(".//a:rPr", NS)
+    return int(rpr.get("sz", "1800")) / 100 if rpr is not None else 18.0
+
+
+def _zero_paragraph_spacing(sp: Element) -> None:
+    for p in sp.iter(q("a:p")):
+        ppr = p.find("a:pPr", NS)
+        if ppr is None:
+            ppr = etree.Element(q("a:pPr"))
+            p.insert(0, ppr)
+        for old in ppr.findall("a:spcBef", NS) + ppr.findall("a:spcAft", NS):
+            ppr.remove(old)
+        index = 1 if ppr.find("a:lnSpc", NS) is not None else 0  # ordre du schéma : lnSpc, spcBef, spcAft, puces…
+        for offset, tag in enumerate(("a:spcBef", "a:spcAft")):
+            spacing = etree.Element(q(tag))
+            etree.SubElement(spacing, q("a:spcPts"), val="0")
+            ppr.insert(index + offset, spacing)
+
+
+def _align_header(group: Element) -> float:
+    """Aligne un groupe « icône + titre de section » et renvoie la largeur de son icône.
+
+    L'icône est calée à gauche et centrée sur la hauteur de capitale du titre ; le titre commence à
+    HEADER_TEXT_OFFSET du bord de l'icône. Le modèle Google Slides donne au titre un espace après de 12 pt
+    dans une zone centrée verticalement : le titre remontait de 6 pt et l'icône paraissait 2,5 mm trop basse.
+    Le coin haut gauche du groupe devient le bord gauche de l'icône et le haut de la zone du titre."""
+    parts = _header_parts(group)
+    if parts is None:
+        return 0.0
+    title, icon = parts
+    _zero_paragraph_spacing(title)
+    g_xfrm = _xfrm(group)
+    ch_off = child(g_xfrm, "a:chOff")
+    ox, oy = emu_to_cm(_emu(ch_off, "x")), emu_to_cm(_emu(ch_off, "y"))
+    _, _, tw, th = get_geom(title)
+    _, _, iw, ih = get_geom(icon)
+    inset = emu_to_cm(int(child(title, "p:txBody/a:bodyPr").get("lIns", "91440")))
+    middle = th / 2 + cap_center_offset(_title_size(title))  # milieu des capitales, sous le haut du titre
+    top = max(0.0, ih / 2 - middle)  # icône plus haute que la zone du titre : le titre descend d'autant
+    set_geom(title, x=ox + HEADER_TEXT_OFFSET - inset, y=oy + top)
+    set_geom(icon, x=ox, y=oy + top + middle - ih / 2)
+    width, height = max(HEADER_TEXT_OFFSET - inset + tw, iw), top + max(th, middle + ih / 2)
+    for tag in ("a:ext", "a:chExt"):  # cadre du groupe ajusté à ses enfants, à l'échelle 1:1
+        ext = child(g_xfrm, tag)
+        ext.set("cx", str(cm(width)))
+        ext.set("cy", str(cm(height)))
+    return iw
+
+
 def _retitle_header(group: Element, title: str) -> None:
     text_sp = next(sp for sp in group.iter(q("p:sp")) if text_of(sp).strip())
     runs = list(text_sp.iter(q("a:t")))
     runs[0].text = title
     for extra in runs[1:]:
         extra.text = ""
-    rpr = text_sp.find(".//a:rPr", NS)
-    size = int(rpr.get("sz", "1800")) / 100 if rpr is not None else 18.0
+    size = _title_size(text_sp)
     needed = text_width(title, "medium", size) / PT_PER_CM + 2 * TEXT_INSET + 0.2
     sp_ext = child(child(text_sp, "p:spPr/a:xfrm"), "a:ext")
     delta = needed - emu_to_cm(_emu(sp_ext, "cx"))
@@ -413,7 +487,14 @@ def _add_hyperlink(t: Template, box: Element, url: str) -> None:
 
 
 def _place_contacts(t: Template, values: dict[str, str | None]) -> None:
+    """Texte aligné sur les titres de la colonne droite ; icônes centrées sur l'axe des icônes de section et
+    sur la hauteur de capitale de leur ligne. S'il manque des lignes, le bloc reste centré sur l'emplacement
+    prévu par le modèle au lieu de laisser un vide en dessous."""
     slots = sorted(get_geom(t.placeholders[n])[1] for n in CONTACT_FIELDS if n in t.placeholders)
+    shown = sum(1 for n in CONTACT_FIELDS if n in t.placeholders and values.get(n))
+    shift = (slots[-1] - slots[shown - 1]) / 2 if shown else 0.0
+    x = RIGHT_X + HEADER_TEXT_OFFSET
+    axis = RIGHT_X + TEXT_INSET + t.icon_width / 2
     slot = 0
     for name in CONTACT_FIELDS:
         box = t.placeholders.get(name)
@@ -427,21 +508,21 @@ def _place_contacts(t: Template, values: dict[str, str | None]) -> None:
             continue
         if name == "linkedin":
             value = _linkedin_display(value)
-        x, y, _, _ = get_geom(box)
-        new_y = slots[slot]
+        _, _, _, h = get_geom(box)
+        y = slots[slot] + shift
         slot += 1
         width = CONTACT_RIGHT_EDGE - x
         size = 10.0
         while size > 7 and not fits_one_line(value, "regular", size, width):
             size -= 0.5
-        set_geom(box, y=new_y, w=width)
+        set_geom(box, x=x, y=y, w=width)
         set_text(box, [Para([Run(value, "regular", size, BLACK)])], anchor="ctr")
         url = _contact_url(name, values.get(name) or value)
         if url:
             _add_hyperlink(t, box, url)
         if icon is not None:
-            _, iy, _, _ = get_geom(icon)
-            set_geom(icon, y=iy + (new_y - y))
+            _, _, iw, ih = get_geom(icon)
+            set_geom(icon, x=axis - iw / 2, y=y + h / 2 + cap_center_offset(size) - ih / 2)
 
 
 # --- Colonne de droite --------------------------------------------------------------
@@ -521,21 +602,21 @@ def _right_column(t: Template, cv: CV, notes: list[str]) -> None:
         y = top
         if comp:
             placements.append(_Placement(comp_header, y))
-            y += SECTION_HEADER_HEIGHT - 0.1
+            y += HEADER_TO_CONTENT
             for box, paras in comp:
                 scaled = scale(paras, factor)
                 h = box_height(scaled, RIGHT_WIDTH)
                 placements.append(_Placement(box, y, h, scaled))
-                y += h - 0.12
-            y += 0.3
+                y += h - 0.12  # blocs d'une même section rapprochés
+            y += 0.12 + SECTION_GAP
         for title, box, paras in sections:
             placements.append(_Placement(t.headers.get(title), y))
-            y += SECTION_HEADER_HEIGHT
+            y += HEADER_TO_CONTENT
             scaled = scale(paras, factor)
             h = box_height(scaled, RIGHT_WIDTH)
             placements.append(_Placement(box, y, h, scaled))
-            y += h + 0.3
-        return y - 0.3, placements
+            y += h + SECTION_GAP
+        return y - SECTION_GAP, placements
 
     while True:
         comp, sections = content()
@@ -574,8 +655,8 @@ def _right_column(t: Template, cv: CV, notes: list[str]) -> None:
     for placement in placements:
         if placement.element is None:
             continue
-        if placement.paras is None:  # titre de section
-            set_geom(placement.element, y=placement.y)
+        if placement.paras is None:  # titre de section : icône sur la marge du texte
+            set_geom(placement.element, x=RIGHT_X + TEXT_INSET, y=placement.y)
         else:
             set_geom(placement.element, x=RIGHT_X, y=placement.y, w=RIGHT_WIDTH, h=placement.height)
             set_text(placement.element, placement.paras)
@@ -687,7 +768,7 @@ def _paginate(flow: list[Block | Header], has_experience_header: bool) -> list[P
             return page().top
         last = segs[-1]
         if last.kind == "header":
-            return last.y + SECTION_HEADER_HEIGHT
+            return last.y + HEADER_TO_CONTENT
         return last.y + (box_height(last.paras, page().width) if last.paras else 0)
 
     def new_page(suite: tuple[str, str] | None, continuation: Para | None) -> Segment:
@@ -705,8 +786,8 @@ def _paginate(flow: list[Block | Header], has_experience_header: bool) -> list[P
         if isinstance(item, Header):
             y = cursor()
             if page().segments:
-                y += HEADER_GAP
-            if y + SECTION_HEADER_HEIGHT + 3.0 > CONTENT_BOTTOM:  # pas de titre orphelin en bas de page
+                y += SECTION_GAP
+            if y + HEADER_TO_CONTENT + 3.0 > CONTENT_BOTTOM:  # pas de titre orphelin en bas de page
                 new_page(None, None)
                 page().segments.clear()
                 y = page().top
@@ -769,7 +850,7 @@ def _page_fill(page: Page) -> float:
     if not page.segments:
         return 0.0
     last = page.segments[-1]
-    bottom = last.y + (SECTION_HEADER_HEIGHT if last.kind == "header" else box_height(last.paras, page.width))
+    bottom = last.y + (HEADER_TO_CONTENT if last.kind == "header" else box_height(last.paras, page.width))
     return (bottom - page.top) / (CONTENT_BOTTOM - page.top)
 
 
@@ -853,6 +934,16 @@ def _fit_left(cv: CV, limit: int | None, notes: list[str], fallback: bool = True
             # continuent sur des pages de suite (cas des profils très expérimentés).
             notes.append(f"Trop d'expériences pour {limit} page(s) : pages de suite réservées aux expériences")
             return _fit_left(cv, None, notes)
+        if hidden or condensed:
+            # Ce qui a été masqué libère souvent plus de place que nécessaire : on reprend la plus grande taille
+            # qui tient encore, sans rien réafficher (comme la colonne de droite après un retrait).
+            for bigger in (1.0, 0.95, 0.9, 0.85):
+                if bigger <= factor:
+                    break
+                trial = run(bigger, frozenset(condensed), mode, volunteering)
+                if len(trial) <= limit:
+                    pages, factor = trial, bigger
+                    break
         if condensed:
             names = [" — ".join(x for x in (pro[i].poste, pro[i].entreprise) if x) for i in sorted(condensed)]
             hidden.append("réalisations de : " + " ; ".join(names))
@@ -887,7 +978,7 @@ def _render_pages(t: Template, pages: list[Page], has_exp: bool) -> None:
                     continue
                 group = t.clone(source, tree)
                 _retitle_header(group, seg.title)
-                set_geom(group, x=LEFT_X + 0.4 if page.x == LEFT_X else page.x, y=seg.y)
+                set_geom(group, x=page.x + TEXT_INSET, y=seg.y)  # icône sur la marge du texte
                 continue
             if index == 0 and not used_template_box:
                 box = exp_box
@@ -900,6 +991,8 @@ def _render_pages(t: Template, pages: list[Page], has_exp: bool) -> None:
         remove(exp_box)
     if not has_exp:
         remove(exp_header)
+    elif exp_header is not None:
+        set_geom(exp_header, x=LEFT_X + TEXT_INSET)
 
 
 def used_template_box_on_first(pages: list[Page]) -> bool:

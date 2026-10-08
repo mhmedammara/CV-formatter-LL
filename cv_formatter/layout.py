@@ -7,6 +7,7 @@ TrueType utilisée par le rendu, puis on reproduit la césure ligne par ligne.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -14,7 +15,7 @@ from functools import lru_cache
 import pymupdf
 
 from . import fonts
-from .config import BLACK, LINE_HEIGHT_FACTOR, ORANGE, SAFETY_MARGIN, TEXT_INSET
+from .config import BASELINE_FACTOR, BLACK, CAP_HEIGHT, LINE_HEIGHT_FACTOR, ORANGE, SAFETY_MARGIN, TEXT_INSET, WIDTH_SAFETY_MARGIN
 
 PT_PER_CM = 72 / 2.54
 
@@ -67,30 +68,42 @@ def text_width(text: str, style: str, size: float) -> float:
     return _font(style).text_length(text, fontsize=size)
 
 
-def _words(para: Para) -> list[list[tuple[str, Run]]]:
-    """Découpe le paragraphe en mots ; un mot peut chevaucher plusieurs runs."""
-    words: list[list[tuple[str, Run]]] = [[]]
+def _words(para: Para) -> list[tuple[float, list[tuple[str, Run]]]]:
+    """Découpe le paragraphe en mots, chacun avec la largeur (points) des espaces qui le précèdent ; un mot
+    peut chevaucher plusieurs runs. Tous les espaces comptent : PowerPoint ne fusionne pas les espaces
+    consécutifs (« Scrum  ·  SAFe »)."""
+    words: list[tuple[float, list[tuple[str, Run]]]] = []
+    current: list[tuple[str, Run]] = []
+    spaces = 0.0
     for run in para.runs:
         for piece in re.split(r"( )", run.text):
-            if piece == "":
-                continue
             if piece == " ":
-                words.append([])
-            else:
-                words[-1].append((piece, run))
-    return [w for w in words if w]
+                if current:
+                    words.append((spaces, current))
+                    current, spaces = [], 0.0
+                spaces += text_width(" ", run.style, run.size)
+            elif piece:
+                current.append((piece, run))
+    if current:
+        words.append((spaces, current))
+    return words
+
+
+def _usable(width_cm: float) -> float:
+    """Largeur disponible pour le texte (points), marges internes et marge de sécurité déduites."""
+    return (width_cm - 2 * TEXT_INSET) * PT_PER_CM / (1 + WIDTH_SAFETY_MARGIN)
 
 
 def wrap(para: Para, width_cm: float) -> list[float]:
-    """Renvoie la taille de police dominante de chaque ligne après césure."""
-    available = max(1.0, (width_cm - 2 * TEXT_INSET - para.indent) * PT_PER_CM)
+    """Renvoie la taille de police dominante de chaque ligne après césure (les espaces en fin de ligne,
+    comme dans PowerPoint, ne comptent pas)."""
+    available = max(1.0, _usable(width_cm - para.indent))
     lines: list[float] = []
     line_width = 0.0
     line_size = 0.0
-    for word in _words(para):
+    for space, word in _words(para):
         word_width = sum(text_width(piece, run.style, run.size) for piece, run in word)
         word_size = max(run.size for _, run in word)
-        space = text_width(" ", word[0][1].style, word[0][1].size)
         if line_width == 0.0:
             if word_width <= available:
                 line_width, line_size = word_width, word_size
@@ -144,7 +157,18 @@ def box_height(paras: list[Para], width_cm: float) -> float:
 
 
 def fits_one_line(text: str, style: str, size: float, width_cm: float) -> bool:
-    return text_width(text, style, size) <= (width_cm - 2 * TEXT_INSET) * PT_PER_CM
+    return text_width(text, style, size) <= _usable(width_cm)
+
+
+def cap_center_offset(size: float) -> float:
+    """Écart (cm) entre le milieu des capitales et le milieu de la ligne, pour une ligne seule centrée
+    verticalement dans sa zone : y centrer une icône l'aligne sur le texte (≈ 0 avec Lexend)."""
+    return (BASELINE_FACTOR - LINE_HEIGHT_FACTOR / 2 - CAP_HEIGHT / 2) * size / PT_PER_CM
+
+
+def _whole_points(value: float) -> float:
+    """Espacement de paragraphe tel que PowerPoint l'applique : arrondi au point entier (0,5 vers le haut)."""
+    return float(math.floor(value + 0.5))
 
 
 def scale(paras: list[Para], factor: float) -> list[Para]:
@@ -158,8 +182,8 @@ def scale(paras: list[Para], factor: float) -> list[Para]:
                 bullet=para.bullet,
                 bullet_color=para.bullet_color,
                 indent=para.indent * factor,
-                space_before=para.space_before * factor,
-                space_after=para.space_after * factor,
+                space_before=_whole_points(para.space_before * factor),
+                space_after=_whole_points(para.space_after * factor),
                 line_spacing=para.line_spacing,
                 align=para.align,
                 keep_with_next=para.keep_with_next,

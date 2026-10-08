@@ -223,20 +223,38 @@ par leur texte, les icônes de coordonnées par proximité ; le modèle peut don
 
 **Mesure du texte.** PowerPoint ne calcule pas la hauteur du texte pour nous. Chaque mot est mesuré avec les
 vraies polices Lexend (`pymupdf.Font.text_length`) et la césure est reproduite ligne par ligne.
-Le modèle de hauteur (**interligne = 1,2 × taille × espacement**) a été **calibré sur le rendu réel de
-PowerPoint** : césure et hauteurs identiques (marge de sécurité 1 %). C'est ce qui permet de garantir qu'un
-texte tient dans sa zone sans le vérifier à l'œil.
+Le modèle a été **calibré sur le rendu réel de PowerPoint**, dont il reprend les règles :
+- interligne = 1,2 × taille × espacement, ligne de base à 0,96 em sous le haut de la ligne ;
+- tous les espaces comptent : PowerPoint ne fusionne pas les espaces consécutifs (« Scrum  ·  SAFe ») ;
+- l'espace avant d'un paragraphe est arrondi au point entier (1,6 pt → 2 pt) : la réduction de police arrondit
+  de même ;
+- le texte rendu est jusqu'à 0,75 % plus large que calculé (tailles arrondies au 1/600 de pouce : 8 pt rendu à
+  8,04 pt) : marge de 1 % sur la largeur. La hauteur, elle, est exacte ; une marge de 0,5 % reste pour les
+  imprévus (glyphe absent de Lexend rendu dans une autre police…).
+
+Contrôle : PowerPoint, interrogé sur la hauteur réelle du texte de chaque zone des 14 CV de test (75 zones),
+ne signale aucun débordement. C'est ce qui permet de garantir qu'un texte tient dans sa zone sans le vérifier
+à l'œil.
+
+**Titres de section et alignements.**
+- Icône calée sur la marge du texte de sa colonne et **centrée sur la hauteur de capitale du titre** (le modèle
+  Google Slides donnait au titre un espace après de 12 pt qui le faisait remonter : l'icône paraissait 2,5 mm
+  trop basse). Titre à 1,3 cm du bord de l'icône dans les deux colonnes, aligné sur le texte des coordonnées.
+- Même rythme vertical partout : 1,05 cm du haut d'un titre à son contenu, 0,3 cm entre la fin d'une section et
+  le titre suivant ; un titre est ainsi plus proche de son contenu que de la section précédente.
+- Listes en ligne (« SAP · Jira · … ») : espaces insécables avant le point, une ligne ne commence jamais par « · ».
 
 **En-tête.**
 - Nom « Prénom NOM » : sur une ligne de préférence (37 → 28 pt), sinon deux lignes (jusqu'à 22 pt), puis trois.
 - Titre du consultant ajouté sous le nom (le modèle n'a pas de champ titre) : ≤ 2 lignes, raccourci au premier
   séparateur (« — », « | »…) s'il est trop long, en dernier recours tronqué avec « … » visible.
 - Pastille d'expérience : élargie si besoin ; supprimée s'il n'y a rien de prouvé.
-- Coordonnées : lignes absentes supprimées avec leur icône, les autres remontent ; police réduite pour tenir
-  sur une ligne ; **e-mail et LinkedIn cliquables** (lien posé sur la zone, pour garder le texte noir non
+- Coordonnées : lignes absentes supprimées avec leur icône, les autres restent groupées et centrées sur
+  l'emplacement du bloc ; icônes sur l'axe des icônes de section, centrées sur leur ligne ; police réduite pour
+  tenir sur une ligne ; **e-mail et LinkedIn cliquables** (lien posé sur la zone, pour garder le texte noir non
   souligné du modèle).
 - Photo : détachée du bord de la feuille, alignée sur la marge du texte et sur le bas de la pastille ; sans
-  photo, le nom s'aligne à gauche.
+  photo, le nom s'aligne sur la marge du texte de la colonne gauche.
 
 **Colonne de droite** (Compétences → Certifications → Formation) : empilée selon la hauteur réelle du contenu.
 Elle reste **toujours sur la page 1** : police réduite jusqu'à 75 %, puis masquage des spécialités de
@@ -253,7 +271,8 @@ gras. La ligne « Environnement » n'est plus affichée.
 **Colonne gauche** (expériences) et **règle d'une page** :
 - **Une page par défaut** si le CV d'origine tient sur une page : police réduite jusqu'à 80 %, puis bénévolat
   retiré, projets condensés puis retirés, puis puces masquées en partant des expériences les plus anciennes
-  (les deux plus récentes restent complètes).
+  (les deux plus récentes restent complètes). Ce qui est masqué libérant souvent plus de place que nécessaire,
+  la police est ensuite agrandie autant que la page le permet (comme pour la colonne de droite).
 - **Pages de suite** uniquement si le CV d'origine fait plusieurs pages (ou s'il est impossible de tenir sur une
   page même condensé), et **seulement pour les expériences** — jamais pour les compétences ou la formation.
   Une dernière page remplie à moins de 30 % est évitée en condensant comme pour un CV d'une page (cas des
@@ -391,6 +410,7 @@ tests/
 | La règle d'une page et l'ordre de condensation | `render_pptx.py` (`_fit_left`) |
 | La sévérité du contrôle de la photo | `visage.py` (`SCORE_THRESHOLD`, `MIN_FACE_RATIO`) et `photo_decision` dans `__main__.py` |
 | La position et la taille de la photo | `config.py` (`PHOTO_X`, `PHOTO_SIZE`, `PHOTO_BOTTOM`, `PHOTO_GAP`) |
+| L'alignement et l'espacement des titres de section | `config.py` (`HEADER_TEXT_OFFSET`, `HEADER_TO_CONTENT`, `SECTION_GAP`) et `render_pptx.py` (`_align_header`) |
 | Le modèle PowerPoint | `assets/modele_cv_logiclever.pptx` (garder les balises `{{…}}`) ou `--template` |
 
 ---
@@ -443,13 +463,22 @@ Le projet a été développé avec Claude Code, par étapes, chaque étape étan
    sont identiques à la veille (texte identique, 0,00 % de pixels modifiés) ; seul le rapport change. Cette
    vérification a aussi révélé et corrigé un défaut : des verdicts de contre-vérification renvoyés avec des
    crochets (« [E0] ») étaient ignorés sans message.
+11. **Alignements et espacements** mesurés sur les 14 CV de test (lignes de base lues dans le PDF, icônes
+    repérées sur le rendu) : icônes de section 2,4 à 2,9 mm sous le centre de leur titre → moins de 0,3 mm ;
+    écart icône → titre de 7,1 mm à gauche contre 5,2 mm à droite → identique ; espaces avant/après les titres
+    harmonisés. PowerPoint, interrogé zone par zone, a aussi révélé de vrais débordements : 7 blocs
+    « SI & outils » chevauchaient le titre suivant et 5 colonnes d'expériences mordaient sur la marge basse →
+    les trois règles de mesure ci-dessus (§ 3.6) corrigent tout : aucun débordement sur les 75 zones. Effet
+    voulu : les colonnes dont le contenu dépassait réellement sont réduites d'un cran de plus ; texte identique
+    pour 13 CV sur 14 (le dernier, qui ne tenait qu'à 0,05 mm près, masque les puces d'une expérience ancienne
+    de plus, avec une police agrandie de 80 à 90 %).
 
 **Tests automatiques** (données fictives, aucun vrai CV) : `python -m pytest -q` après
 `pip install -r requirements-dev.txt`. Ils couvrent le contrôle anti-invention (inventions retirées, vraies
 informations gardées malgré les tolérances), l'application des verdicts (y compris identifiants entre
 crochets), les années d'expérience, les décisions sur la photo, la détection de visage, la typographie, la mesure
-du texte, le rendu (une page, aucun champ `{{…}}` restant, liens, pages de suite réservées aux expériences)
-et l'anonymisation.
+du texte (règles de PowerPoint comprises), le rendu (une page, aucun champ `{{…}}` restant, liens, pages de suite
+réservées aux expériences, alignement des titres de section et des coordonnées) et l'anonymisation.
 
 **Comment vérifier après une modification** :
 1. `python -m pytest -q` (tests automatiques, quelques secondes) ;

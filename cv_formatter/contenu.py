@@ -336,6 +336,9 @@ def sort_experiences(experiences: list[Experience]) -> list[Experience]:
 
 BODY = 10.0
 TYPE_TAGS = {"alternance": "Alternance", "stage": "Stage", "freelance": "Freelance"}  # mention à côté des dates
+# Séparateur des éléments sur une ligne : espaces insécables avant le point, pour qu'une ligne coupée
+# finisse par « · » au lieu de commencer par lui.
+SEP = "\u00a0\u00a0·  "
 
 
 def experience_block(exp: Experience, condensed: bool = False) -> Block:
@@ -358,13 +361,13 @@ def experience_block(exp: Experience, condensed: bool = False) -> Block:
         runs: list[Run] = []
         for i, run in enumerate(org):
             if i:
-                runs.append(Run("  ·  ", "regular", BODY, BLUE))
+                runs.append(Run(SEP, "regular", BODY, BLUE))
             runs.append(run)
         paras.append(Para(runs, space_before=1, keep_with_next=True))
 
     period = format_period(exp)
     if period:
-        label = "  ·  ".join(x for x in (period, TYPE_TAGS.get(exp.type)) if x)
+        label = SEP.join(x for x in (period, TYPE_TAGS.get(exp.type)) if x)
         paras.append(Para([Run(label, "medium", 9.5, ORANGE)], space_before=1, keep_with_next=True))
 
     if exp.contexte:
@@ -386,7 +389,7 @@ def project_block(prj: Projet, titles_only: bool = False) -> Block:
     paras = [Para([Run(clean_item(tame_caps(prj.nom)), "semibold", 11, BLACK)], space_before=10, keep_with_next=True)]
     meta = [x for x in (prj.cadre, clean_period_text(prj.periode_texte) if prj.periode_texte else None) if x]
     if meta:
-        paras.append(Para([Run("  ·  ".join(meta), "medium", 9.5, ORANGE)], space_before=1, keep_with_next=True))
+        paras.append(Para([Run(SEP.join(meta), "medium", 9.5, ORANGE)], space_before=1, keep_with_next=True))
     if titles_only:
         paras[-1].keep_with_next = False
         return Block(paras, None)
@@ -411,7 +414,7 @@ def bullet_paras(items: list[str], size: float = BODY) -> list[Para]:
 
 def inline_para(items: list[str], size: float = BODY) -> list[Para]:
     cleaned = [clean_item(i, False) for i in items if clean_item(i, False)]
-    return [Para([Run("  ·  ".join(cleaned), "regular", size, BLACK)], line_spacing=1.15, space_before=1)] if cleaned else []
+    return [Para([Run(SEP.join(cleaned), "regular", size, BLACK)], line_spacing=1.15, space_before=1)] if cleaned else []
 
 
 def langues_paras(langues: list[Langue]) -> list[Para]:
@@ -430,7 +433,7 @@ def certification_paras(certifications: list[Certification]) -> list[Para]:
         paras.append(Para([Run(clean_item(tame_caps(cert.intitule)), "semibold", BODY, BLACK)], line_spacing=1.05, space_before=0 if i == 0 else 5, keep_with_next=True))
         meta = [x.strip() for x in (cert.organisme, cert.date) if x and x.strip()]
         if meta:
-            paras.append(Para([Run("  ·  ".join(meta), "regular", 9, GREY)], line_spacing=1.05, space_before=1))
+            paras.append(Para([Run(SEP.join(meta), "regular", 9, GREY)], line_spacing=1.05, space_before=1))
     if paras:
         paras[-1].keep_with_next = False
     return paras
@@ -442,7 +445,7 @@ def formation_paras(formations: list[Formation], with_details: bool = True) -> l
         details = form.details if with_details else None
         paras.append(Para([Run(clean_item(tame_caps(form.diplome)), "semibold", BODY, BLACK)], line_spacing=1.05, space_before=0 if i == 0 else 5, keep_with_next=True))
         place = ", ".join(x.strip() for x in (form.etablissement, form.lieu) if x and x.strip())
-        meta = "  ·  ".join(x for x in (place, form.periode.strip() if form.periode else "") if x)
+        meta = SEP.join(x for x in (place, form.periode.strip() if form.periode else "") if x)
         if meta:
             paras.append(Para([Run(meta, "regular", 9, GREY)], line_spacing=1.05, space_before=1, keep_with_next=bool(details)))
         if details:

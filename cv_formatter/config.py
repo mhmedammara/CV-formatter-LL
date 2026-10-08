@@ -62,22 +62,35 @@ TEXT_INSET = 0.254              # marges internes PowerPoint (91 425 EMU)
 
 LEFT_X = 0.96                   # colonne Expériences
 LEFT_WIDTH = 12.44
-LEFT_TOP_PAGE1 = 7.98            # aligné sur le premier bloc de la colonne droite
+LEFT_TOP_PAGE1 = 7.98            # titre Expériences du modèle (6,93) + HEADER_TO_CONTENT, comme la colonne droite
 
 RIGHT_X = 13.81                 # colonne Compétences / Certifications / Formation
 RIGHT_WIDTH = 6.47
-RIGHT_HEADER_X = 14.11
 
-SECTION_HEADER_HEIGHT = 1.15    # groupe icône + titre de section
+# Titres de section (groupe icône + titre) : l'icône est calée sur la marge du texte de la colonne et
+# centrée sur la hauteur de capitale du titre ; le titre commence à HEADER_TEXT_OFFSET du bord de l'icône,
+# comme le texte des coordonnées (même alignement dans les deux colonnes).
+HEADER_TEXT_OFFSET = 1.3
+HEADER_TO_CONTENT = 1.05        # du haut du titre de section au haut de la zone de texte qui le suit
+SECTION_GAP = 0.3               # du bas d'une section au titre suivant : plus d'air au-dessus d'un titre qu'en dessous
 CONTINUATION_HEADER_Y = 1.75    # en-tête « Expériences (suite) » sur les pages suivantes
 FULL_WIDTH = PAGE_WIDTH - 2 * LEFT_X
 
-NO_PHOTO_X = 1.36               # alignement du nom quand il n'y a pas de photo
+NO_PHOTO_X = LEFT_X + TEXT_INSET  # sans photo, le nom s'aligne sur la marge du texte de la colonne gauche
 PHOTO_X = 1.21                  # photo alignée sur la marge du texte (et non collée au bord)
 PHOTO_SIZE = 3.9
 PHOTO_BOTTOM = 6.25             # bas de la photo aligné sur le bas de la pastille
 PHOTO_GAP = 0.55                # espace entre la photo et le nom
 
-# Calibrage des hauteurs de ligne mesuré sur le rendu PowerPoint (voir layout.py).
+# Calibrage des hauteurs de ligne mesuré sur le rendu PowerPoint (voir layout.py) : interligne simple de
+# 1,2 em, ligne de base à 0,96 em sous le haut de la ligne ; capitales de Lexend : 0,70 em.
 LINE_HEIGHT_FACTOR = 1.2
-SAFETY_MARGIN = 0.01
+BASELINE_FACTOR = 0.96
+CAP_HEIGHT = 0.70
+# Hauteur : le modèle reproduit PowerPoint au centième de millimètre près (75 zones de 14 CV contrôlées) ;
+# la marge ne sert plus qu'aux imprévus (glyphe absent de Lexend rendu dans une autre police, etc.).
+SAFETY_MARGIN = 0.005
+# Largeur : PowerPoint arrondit tailles et avances au 1/600 de pouce ; mesuré sur 772 lignes, le texte rendu
+# est jusqu'à 0,75 % plus large que calculé (8 pt rendu à 8,04 pt). Sans marge, une ligne pleine passait à
+# la ligne suivante et le bloc débordait sur le titre de section suivant.
+WIDTH_SAFETY_MARGIN = 0.01

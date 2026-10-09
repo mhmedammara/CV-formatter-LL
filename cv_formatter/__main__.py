@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 import zipfile
@@ -70,6 +71,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--donnees", type=Path, default=None, help="Dossier des extractions enregistrées (défaut : sortie/_donnees)")
     parser.add_argument("--cache-par-empreinte", action="store_true", help="Extractions enregistrées sous l'empreinte SHA-256 du CV et non sous son nom (cache partagé du service web)")
     parser.add_argument("--photos", type=Path, default=None, help="Dossier des photos recadrées (défaut : <données>/photos)")
+    parser.add_argument("--originaux", type=Path, default=None, help="Copie chaque CV traité dans ce dossier, sous un nom unique, et l'indique dans rapport.json (service web : CV d'origine téléchargeable, même extrait d'un .zip)")
     parser.add_argument("--template", type=Path, default=None, help="Modèle PowerPoint à utiliser")
     parser.add_argument("--ouvrir", action="store_true", help="Ouvre le dossier de sortie à la fin")
     parser.add_argument("--version", action="version", version=f"cv_formatter {__version__}")
@@ -229,6 +231,20 @@ def make_jobs(files: list[Path], data_dir: Path, by_hash: bool) -> list[Job]:
     return jobs
 
 
+def copy_originals(jobs: list[Job], folder: Path) -> None:
+    """Copie de chaque CV traité, en échec compris, sous un nom unique : deux « CV.pdf » de dossiers
+    différents d'une archive ne s'écrasent pas."""
+    folder.mkdir(parents=True, exist_ok=True)
+    used: set[str] = set()
+    for job in jobs:
+        name, n = job.path.name, 2
+        while name.lower() in used:
+            name, n = f"{job.path.stem} ({n}){job.path.suffix}", n + 1
+        used.add(name.lower())
+        shutil.copyfile(job.path, folder / name)
+        job.report.original = folder / name
+
+
 def run(args: argparse.Namespace, progress: Progress | None = None) -> int:
     reconfigure = getattr(sys.stdout, "reconfigure", None)  # absent si la sortie est redirigée vers un objet quelconque
     if callable(reconfigure):
@@ -270,6 +286,8 @@ def run(args: argparse.Namespace, progress: Progress | None = None) -> int:
         print(f"  ! Polices Lexend non installées ({exc}) : le PDF utilisera une police de remplacement.")
 
     jobs = make_jobs(files, data_dir, args.cache_par_empreinte)
+    if args.originaux:
+        copy_originals(jobs, args.originaux.resolve())
     has_key = api_key_available()
     client: OpenAI | None = None
 

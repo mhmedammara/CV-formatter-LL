@@ -164,14 +164,46 @@ def test_job_traite_un_lot_sans_appel_api(tmp_path: Path, monkeypatch: pytest.Mo
     with zipfile.ZipFile(sortie / "anonyme" / anonyme["cv"][0]["pptx"]) as pptx:
         xml = " ".join(pptx.read(n).decode("utf-8", "ignore") for n in pptx.namelist() if n.endswith(".xml"))
     assert "DUPONT" not in xml and "Jean" not in xml
+    # CV d'origine : copie gardée avec chaque version (bouton « Original »), une seule fois dans l'archive.
+    for version, rapport in (("nominatif", nominatif), ("anonyme", anonyme)):
+        assert rapport["cv"][0]["original"] == "originaux/CV Jean DUPONT.pdf"
+        assert (sortie / version / "originaux" / "CV Jean DUPONT.pdf").read_bytes() == source.read_bytes()
     with zipfile.ZipFile(sortie / "resultats.zip") as archive:
         noms = archive.namelist()
     assert "CV nominatifs/CV Logiclever - Jean DUPONT.pptx" in noms and "CV anonymes/rapport.md" in noms
-    assert any(n.startswith("CV d'origine/") for n in noms)
+    assert [n for n in noms if "originaux" in n or n.startswith("CV d'origine/")] == ["CV d'origine/CV Jean DUPONT.pdf"]
     assert not any(n.endswith("rapport.json") for n in noms)
     assert "CV nominatifs/CV Logiclever - Jean DUPONT.json" in noms
     donnees_anonymes = json.loads((sortie / "anonyme" / anonyme["cv"][0]["json"]).read_text(encoding="utf-8"))
     assert "DUPONT" not in json.dumps(donnees_anonymes, ensure_ascii=False) and donnees_anonymes["nom_affiche"] == "J. D."
+
+
+def test_job_garde_l_original_d_un_cv_extrait_d_un_zip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Export Google Drive déposé en .zip : chaque CV qu'il contient a son original, téléchargeable seul et rangé
+    dans « CV d'origine » ; ce qui n'est pas un CV (un PowerPoint) et le dossier décompressé ne sont pas repris."""
+    monkeypatch.setattr(lots, "DONNEES", tmp_path / "donnees")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "export_pdfs", lambda pptx: PdfExport())
+    source = _cv_source(tmp_path)
+    lot = lots.creer("jeanne@logiclever.com", lots.Options())
+    (lot.dossier / "entree").mkdir(parents=True)
+    with zipfile.ZipFile(lot.dossier / "entree" / "export.zip", "w") as archive:
+        archive.writestr(f"Candidats/{source.name}", source.read_bytes())
+        archive.writestr("Candidats/Présentation.pptx", b"pas un CV")
+    lot.fichiers, lot.lance_le = [{"nom": "export.zip", "taille": 1}], lots.maintenant()
+    lot.enregistrer()
+    assert traitement.traiter(lot.id) == 0
+    sortie = lot.dossier / "sortie"
+    cv = json.loads((sortie / "nominatif" / "rapport.json").read_text(encoding="utf-8"))["cv"][0]
+    assert cv["source"] == source.name and cv["original"] == f"originaux/{source.name}"
+    assert not (sortie / "nominatif" / "_entree_zip").exists()
+    client = TestClient(web_app.app)
+    reponse = client.get(f"/api/lots/{lot.id}/resultats/nominatif/originaux/{source.name}?apercu=1")
+    assert reponse.status_code == 200 and reponse.content == source.read_bytes()
+    with zipfile.ZipFile(sortie / "resultats.zip") as archive:
+        noms = archive.namelist()
+    assert f"CV d'origine/{source.name}" in noms
+    assert not any("_entree_zip" in n or n.endswith((".zip", "Présentation.pptx")) for n in noms)
 
 
 def test_job_signale_une_archive_illisible(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

@@ -6,6 +6,7 @@ Lancer : python -m pytest -q
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -23,7 +24,17 @@ from pptx.shapes.group import GroupShape
 from pptx.util import Emu
 
 from cv_formatter import contenu
-from cv_formatter.__main__ import Job, collect_files, default_input, json_edited, needs_extraction, photo_decision, safe_name
+from cv_formatter.__main__ import (
+    Job,
+    collect_files,
+    copy_originals,
+    default_input,
+    json_edited,
+    make_jobs,
+    needs_extraction,
+    photo_decision,
+    safe_name,
+)
 from cv_formatter.anonymisation import anonymize, initials
 from cv_formatter.config import (
     FONTS_DIR,
@@ -40,7 +51,7 @@ from cv_formatter.controle import apply_verdicts, build_claims, fingerprint_data
 from cv_formatter.extraction import EXTRACTION_VERSION
 from cv_formatter.layout import PT_PER_CM, Para, Run, cap_center_offset, line_count, para_height, scale, text_width
 from cv_formatter.pdf_source import SourceDocument, fix_text, load_source
-from cv_formatter.rapport import CVReport
+from cv_formatter.rapport import CVReport, write_report_json
 from cv_formatter.render_pptx import NS as XML_NS, RenderResult, render_cv, split_long_para, text_of
 from cv_formatter.schema import CV, Verdict
 from cv_formatter.verification import verify
@@ -405,6 +416,23 @@ def test_input_folder_is_the_default_and_zips_are_unpacked(tmp_path: Path):
         archive.writestr("b.pdf", b"%PDF-1.4")
     names = sorted(p.name for p in collect_files([folder], tmp_path / "sortie"))
     assert names == ["a.pdf", "b.pdf"]
+
+
+def test_originals_are_copied_under_unique_names(tmp_path: Path):
+    """Deux « CV.pdf » de dossiers différents d'une archive gardent chacun leur copie (service web : bouton « Original »)."""
+    with zipfile.ZipFile(tmp_path / "drive.zip", "w") as archive:
+        archive.writestr("Equipe A/CV.pdf", b"%PDF-1.4 A")
+        archive.writestr("Equipe B/CV.pdf", b"%PDF-1.4 B")
+        archive.writestr("Equipe B/modele.pptx", b"pas un CV")
+    output = tmp_path / "sortie"
+    jobs = make_jobs(collect_files([tmp_path / "drive.zip"], output), tmp_path / "cache", by_hash=True)
+    copy_originals(jobs, output / "originaux")
+    copies = [j.report.original for j in jobs if j.report.original]
+    assert [p.name for p in copies] == ["CV.pdf", "CV (2).pdf"]
+    assert [p.read_bytes() for p in copies] == [b"%PDF-1.4 A", b"%PDF-1.4 B"]
+    write_report_json([j.report for j in jobs], output / "rapport.json", "")
+    rapport = json.loads((output / "rapport.json").read_text(encoding="utf-8"))
+    assert [cv["original"] for cv in rapport["cv"]] == ["originaux/CV.pdf", "originaux/CV (2).pdf"]
 
 
 # --- Années d'expérience ----------------------------------------------------------------------

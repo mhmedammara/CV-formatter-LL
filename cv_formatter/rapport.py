@@ -26,6 +26,7 @@ class CVReport:
     photo: str = ""
     photo_file: Path | None = None  # photo choisie (vignette dans le rapport), même si elle a été retirée
     photo_rejected: bool = False
+    original: Path | None = None  # copie du CV d'origine (--originaux)
     experience: str = ""
     cross_check: str = ""
     skipped_sections: list[str] = field(default_factory=list[str])
@@ -126,6 +127,7 @@ def write_report_json(reports: list[CVReport], target: Path, settings: str) -> P
             "photo": r.photo,
             "photo_fichier": rel(r.photo_file),
             "photo_retiree": r.photo_rejected,
+            "original": rel(r.original),
             "experience": r.experience,
             "sections_non_reprises": r.skipped_sections,
             "mise_en_page": r.layout_notes,

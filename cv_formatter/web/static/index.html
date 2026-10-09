@@ -378,13 +378,17 @@ function afficherResultats(vue) {
 }
 
 let originaux = new Set(), lienOriginal = () => "";
-// Bouton vers le CV déposé (pas pour un CV extrait d'un .zip : l'archive entière reste dans le .zip du lot).
-const original = (source) => originaux.has(source)
-  ? `<a class="bouton second petit" href="${lienOriginal(source, /\.(pdf|png|jpe?g|webp)$/i.test(source))}" target="_blank" rel="noopener">Original</a>` : "";
+// Bouton vers le CV d'origine : copie gardée avec les résultats (aussi pour un CV extrait d'un .zip) ; pour un lot
+// traité avant ces copies, ou une archive illisible, le fichier déposé.
+const apercu = (nom) => /\.(pdf|png|jpe?g|webp)$/i.test(nom);
+function original(cv, lien) {
+  const href = cv.original ? lien(cv.original, apercu(cv.original)) : originaux.has(cv.source) ? lienOriginal(cv.source, apercu(cv.source)) : "";
+  return href ? `<a class="bouton second petit" href="${href}" target="_blank" rel="noopener">Original</a>` : "";
+}
 function carteCV(cv, lien) {
   if (cv.erreur) return `<div class="cv"><div class="cv-haut"><div class="ident"><strong>${esc(cv.source)}</strong><small>${esc(cv.erreur)}</small></div>
     <div class="badges"><span class="badge echec">Échec</span></div>
-    <div class="liens">${original(cv.source)}</div></div></div>`;
+    <div class="liens">${original(cv, lien)}</div></div></div>`;
   const verifier = cv.a_verifier.length, retires = cv.retires.length, alertes = cv.avertissements.length;
   const badges = [
     verifier ? `<span class="badge verifier">${verifier} à vérifier</span>` : "",
@@ -403,7 +407,7 @@ function carteCV(cv, lien) {
         ${cv.pptx ? `<a class="bouton second petit" href="${lien(cv.pptx)}">PowerPoint</a>` : ""}
         ${cv.json ? `<a class="bouton second petit" href="${lien(cv.json, true)}" target="_blank" rel="noopener">JSON</a>` : ""}
         ${cv.photo_fichier && !cv.photo_retiree && cv.pptx ? `<a class="bouton second petit" href="${lien(cv.photo_fichier)}${lien(cv.photo_fichier).includes("?") ? "&" : "?"}nom=${encodeURIComponent(cv.pptx.replace(/\.pptx$/i, ".jpg"))}">Photo</a>` : ""}
-        ${original(cv.source)}</div></div>
+        ${original(cv, lien)}</div></div>
     <details><summary>Détail du contrôle</summary><div class="detail">
       ${liste("À vérifier", cv.a_verifier, element)}
       ${liste("Retiré ou corrigé (non prouvé par le CV d'origine)", cv.retires, element)}

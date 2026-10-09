@@ -51,13 +51,15 @@ class Avancement:
 
 
 def _copier_resultats(source: Path, cible: Path) -> list[Path]:
-    """Copie les fichiers utiles du dossier de travail vers le lot (sans les .zip décompressés)."""
+    """Copie les fichiers utiles du dossier de travail vers le lot : résultats et CV d'origine (copies de
+    originaux/, quel que soit leur format), sans les .zip décompressés (_entree_zip/)."""
     copies: list[Path] = []
     for fichier in sorted(source.rglob("*")):
         relatif = fichier.relative_to(source)
-        if not fichier.is_file() or relatif.parts[0].startswith("_"):
+        dossiers = relatif.parts[1:-1]  # sous le dossier de la version
+        if not fichier.is_file() or any(d.startswith("_") for d in dossiers):
             continue
-        if fichier.suffix.lower() not in {".pptx", ".pdf", ".md", ".json", ".jpg"}:
+        if fichier.suffix.lower() not in {".pptx", ".pdf", ".md", ".json", ".jpg"} and dossiers != ("originaux",):
             continue
         destination = cible / relatif
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -84,7 +86,8 @@ def traiter(lot_id: str) -> int:
             avancement.version = version
             sortie = travail / "sortie" / version
             arguments = [str(entree), "--sortie", str(sortie), "--donnees", str(lots.DONNEES / "cache"),
-                         "--cache-par-empreinte", "--exporter-json", "--photos", str(sortie / "photos")]
+                         "--cache-par-empreinte", "--exporter-json", "--photos", str(sortie / "photos"),
+                         "--originaux", str(sortie / "originaux")]
             if version == "anonyme":
                 arguments.append("--anonymiser")
             if lot.options.sans_coordonnees:
@@ -93,7 +96,8 @@ def traiter(lot_id: str) -> int:
             with contextlib.redirect_stdout(io.StringIO()):
                 codes.append(run(parse_args(arguments), progress=avancement))
         copies = _copier_resultats(travail / "sortie", sortie_lot)
-    # Archive de tout le lot : PPTX, PDF, rapports et photos du rapport, rangés par version.
+    # Archive de tout le lot : PPTX, PDF, rapports et photos du rapport, rangés par version, puis les CV d'origine
+    # (un fichier par CV, y compris ceux extraits d'un .zip ; identiques d'une version à l'autre : une seule fois).
     # Photo retenue : nommée d'après le CV (« CV Logiclever - Jean DUPONT.jpg ») plutôt que l'empreinte du fichier.
     noms_photos: dict[Path, Path] = {}
     for version in versions:
@@ -102,12 +106,12 @@ def traiter(lot_id: str) -> int:
                 noms_photos[Path(version, cv["photo_fichier"])] = Path(version, Path(cv["pptx"]).with_suffix(".jpg"))
     with zipfile.ZipFile(sortie_lot / "resultats.zip", "w", zipfile.ZIP_DEFLATED) as archive:
         for relatif in copies:
-            if relatif.name != "rapport.json":
+            if relatif.parts[1:-1] == ("originaux",):
+                if relatif.parts[0] == versions[0]:
+                    archive.write(sortie_lot / relatif, f"CV d'origine/{relatif.name}")
+            elif relatif.name != "rapport.json":
                 dans_zip = noms_photos.get(relatif, relatif)
                 archive.write(sortie_lot / relatif, f"{lots.VERSIONS[dans_zip.parts[0]]}/{Path(*dans_zip.parts[1:])}")
-        for depose in sorted((lot.dossier / "entree").iterdir()):
-            if depose.is_file():
-                archive.write(depose, f"CV d'origine/{depose.name}")
     reussi = all(code in (0, 1) for code in codes)  # 1 : au moins un CV en échec (détaillé dans le rapport)
     lots.ecrire_statut(lot_id, "termine" if reussi else "echec", **({} if reussi else {"message": "aucun CV n'a pu être traité"}))
     print(f"lot {lot_id} : {len(lot.fichiers)} fichier(s), versions {'+'.join(versions)}, codes {codes}")

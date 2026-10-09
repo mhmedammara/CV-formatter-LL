@@ -33,8 +33,9 @@ les choix qui ont été faits, et la logique suivie à chaque étape, pour pouvo
 
 Rien à installer : on ouvre l'adresse du service, on se connecte avec son compte Google **@logiclever.com**, on
 dépose les CV (PDF, Word, images ou `.zip` d'un dossier Drive), on choisit la version nominative, anonyme ou les
-deux, puis on télécharge chaque PDF et PowerPoint, ou tout le lot en `.zip`, avec le détail du contrôle affiché
-pour chaque CV. Les lots restent dans l'historique 30 jours puis sont supprimés.
+deux, puis on télécharge chaque PDF et PowerPoint (et le CV d'origine, même extrait d'un `.zip`), ou tout le lot
+en `.zip`, avec le détail du contrôle affiché pour chaque CV. Les lots restent dans l'historique 30 jours puis
+sont supprimés.
 
 Même programme que la version Windows ; le PDF y est produit par LibreOffice, calé sur le rendu de PowerPoint
 (voir [3.11](#311-rendu-pdf-sous-linux--calage-sur-powerpoint)). Déploiement, coût et administration :
@@ -83,6 +84,7 @@ python -m cv_formatter [dossiers | fichiers | .zip] [options]
 | `--modele`, `--effort` | modèle OpenAI (défaut `gpt-6-luna`) et effort de raisonnement (défaut `high`) |
 | `--template FICHIER.pptx` | autre modèle PowerPoint (champs repérés par leurs balises `{{…}}`) |
 | `--donnees DOSSIER`, `--cache-par-empreinte`, `--photos DOSSIER` | emplacement des extractions enregistrées (rangées par empreinte du CV plutôt que par nom de fichier) et des photos — utilisés par le service en ligne |
+| `--originaux DOSSIER` | copie de chaque CV traité (y compris extrait d'un `.zip`), sous un nom unique, citée dans `rapport.json` — utilisé par le service en ligne (bouton « Original ») |
 
 ---
 
@@ -565,7 +567,7 @@ Le projet a été développé avec Claude Code, par étapes, chaque étape étan
     300 Mio de mémoire, d'où un job à 1 vCPU / 2 Gio.
 
 **Tests automatiques** (données fictives, aucun vrai CV) : `python -m pytest -q` après
-`pip install -r requirements-cloud.txt -r requirements-dev.txt` (90 tests, dont 2 réservés à l'image Linux).
+`pip install -r requirements-cloud.txt -r requirements-dev.txt` (94 tests, dont 2 réservés à l'image Linux).
 Ils couvrent le contrôle anti-invention (inventions retirées, vraies
 informations gardées malgré les tolérances), l'application des verdicts (y compris identifiants entre
 crochets), les années d'expérience, les décisions sur la photo, la détection de visage, la typographie, la mesure

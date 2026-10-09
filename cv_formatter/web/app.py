@@ -41,9 +41,20 @@ def _lot(lot_id: str) -> lots.Lot:
                                                       if lots.RETENTION_JOURS else ".")) from None
 
 
-def _vue(lot: lots.Lot) -> dict[str, Any]:
+_vues_figees: dict[str, dict[str, Any]] = {}  # vue des lots terminés, qui ne changent plus
+
+
+def _lot_fige_ou_relu(lot_id: str) -> lots.Lot:
+    """Lot pour un téléchargement : depuis la mémoire s'il est terminé, sinon relu."""
+    try:
+        return lots.charger_avec_statut(lot_id)[0]
+    except lots.LotIntrouvable:
+        return _lot(lot_id)  # message d'erreur habituel
+
+
+def _vue(lot: lots.Lot, statut: dict[str, Any] | None = None) -> dict[str, Any]:
     """Tout ce que la page affiche pour un lot."""
-    statut = lots.statut(lot)
+    statut = dict(statut) if statut is not None else lots.statut(lot)
     rapports: dict[str, Any] = {}
     sortie = lot.dossier / "sortie"
     for version in lot.options.versions:
@@ -94,7 +105,18 @@ async def nouveau(request: Request) -> dict[str, Any]:
 
 @app.get("/api/lots/{lot_id}")
 def consulter(lot_id: str) -> dict[str, Any]:
-    return _vue(_lot(lot_id))
+    if lot_id in _vues_figees and lot_id in lots._memoire:
+        return _vues_figees[lot_id]
+    try:
+        lot, statut = lots.charger_avec_statut(lot_id)
+    except lots.LotIntrouvable:
+        lot, statut = _lot(lot_id), None
+    vue = _vue(lot, statut)
+    if lot_id in lots._memoire:
+        _vues_figees[lot_id] = vue
+        for ancien in [i for i in _vues_figees if i not in lots._memoire]:
+            del _vues_figees[ancien]
+    return vue
 
 
 @app.post("/api/lots/{lot_id}/fichiers")
@@ -175,7 +197,7 @@ def _fichier_du_lot(lot: lots.Lot, chemin: str) -> Path:
 
 @app.get("/api/lots/{lot_id}/resultats/{chemin:path}")
 def telecharger(lot_id: str, chemin: str, apercu: bool = False, nom: str = "") -> FileResponse:
-    lot = _lot(lot_id)
+    lot = _lot_fige_ou_relu(lot_id)
     cible = _fichier_du_lot(lot, chemin)
     if nom:  # nom proposé au téléchargement (photo nommée d'après le CV), même extension que le fichier
         nom = lots.nom_de_fichier(nom, set())
@@ -188,7 +210,7 @@ def telecharger(lot_id: str, chemin: str, apercu: bool = False, nom: str = "") -
 @app.get("/api/lots/{lot_id}/originaux/{nom}")
 def original(lot_id: str, nom: str, apercu: bool = False) -> FileResponse:
     """CV tel qu'il a été déposé (conservé avec le lot)."""
-    lot = _lot(lot_id)
+    lot = _lot_fige_ou_relu(lot_id)
     cible = lot.dossier / "entree" / nom
     if nom not in {f["nom"] for f in lot.fichiers} or not cible.is_file():
         raise HTTPException(404, "Fichier introuvable.")

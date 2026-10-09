@@ -184,3 +184,17 @@ def test_job_signale_une_archive_illisible(tmp_path: Path, monkeypatch: pytest.M
     traitement.traiter(lot.id)
     rapport = json.loads((lot.dossier / "sortie" / "nominatif" / "rapport.json").read_text(encoding="utf-8"))
     assert rapport["cv"][0]["source"] == "export.zip" and "archive ignorée" in rapport["cv"][0]["erreur"]
+
+
+def test_lot_termine_garde_en_memoire(client: TestClient):
+    """Un lot terminé ne change plus : il est servi sans relire le bucket ; un lot en cours est toujours relu."""
+    lot = _nouveau(client)
+    _deposer(client, lot, "cv.pdf")
+    client.post(f"/api/lots/{lot}/lancer")
+    lots.ecrire_statut(lot, "en_cours", etape="extraction")
+    assert client.get(f"/api/lots/{lot}").json()["statut"]["etat"] == "en_cours"
+    lots.ecrire_statut(lot, "termine")
+    assert client.get(f"/api/lots/{lot}").json()["statut"]["etat"] == "termine"
+    (lots.dossier_lot(lot) / "statut.json").unlink()  # plus relu : la vue en mémoire suffit
+    assert client.get(f"/api/lots/{lot}").json()["statut"]["etat"] == "termine"
+    assert client.get("/api/lots", headers=MOI).json()["lots"][0]["statut"] == "termine"

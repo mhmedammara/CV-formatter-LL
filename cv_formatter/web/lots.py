@@ -25,6 +25,7 @@ import os
 import re
 import unicodedata
 import uuid
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -111,6 +112,26 @@ def charger(lot_id: str) -> Lot:
                data.get("fichiers", []), data.get("lance_le"))
 
 
+# Lots terminés (ou en échec) : plus rien n'y change, on les garde en mémoire pour ne pas relire le bucket
+# (≈ 50 à 100 ms par fichier lu). Les lots en cours sont toujours relus : l'avancement reste à jour.
+FIGES = ("termine", "echec")
+_memoire: OrderedDict[str, tuple[Lot, dict[str, Any]]] = OrderedDict()
+MEMOIRE_MAX = 500
+
+
+def charger_avec_statut(lot_id: str) -> tuple[Lot, dict[str, Any]]:
+    if lot_id in _memoire:
+        _memoire.move_to_end(lot_id)
+        return _memoire[lot_id]
+    lot = charger(lot_id)
+    etat = statut(lot)
+    if etat.get("etat") in FIGES:
+        _memoire[lot_id] = (lot, etat)
+        while len(_memoire) > MEMOIRE_MAX:
+            _memoire.popitem(last=False)
+    return lot, etat
+
+
 def statut(lot: Lot) -> dict[str, Any]:
     if lot.lance_le is None:
         return {"etat": "brouillon"}
@@ -171,12 +192,12 @@ def lots_de(auteur: str, page: int = 1, par_page: int = 20) -> dict[str, Any]:
     disparus: list[str] = []
     for lot_id in ids[(page - 1) * par_page:page * par_page]:
         try:
-            lot = charger(lot_id)
+            lot, etat = charger_avec_statut(lot_id)
         except LotIntrouvable:  # supprimé par la règle de conservation
             disparus.append(lot_id)
             continue
         trouves.append({"id": lot.id, "cree_le": lot.cree_le, "fichiers": len(lot.fichiers),
-                        "options": asdict(lot.options), "statut": statut(lot).get("etat")})
+                        "options": asdict(lot.options), "statut": etat.get("etat")})
     if disparus:
         ecrire_json(_index(auteur), {"lots": [i for i in _ids_de(auteur) if i not in disparus]})
     return {"lots": trouves, "page": page, "pages": pages, "total": len(ids) - len(disparus)}

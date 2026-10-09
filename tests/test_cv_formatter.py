@@ -633,7 +633,7 @@ def test_render_one_page_and_fields(tmp_path: Path):
     result, prs = _render(tmp_path, cv, experience_label="5 ans d’expérience", source_pages=1)
     text = _all_text(prs)
     assert result.pages == 1 and len(prs.slides) == 1
-    assert "{{" not in text and "Jean DUPONT" in text and "SI & outils" in text and "5 ans d’expérience" in text
+    assert "{{" not in text and "Jean DUPONT" in text and "SI & OUTILS" in text and "5 ans d’expérience" in text
     assert "ACME Conseil" in text and "Client : Banque Exemple" in text
     rels = [r.target_ref for r in prs.slides[0].part.rels.values() if r.is_external]
     assert "mailto:jean.dupont@example.com" in rels and any("linkedin.com/in/jean-dupont" in r for r in rels)
@@ -644,8 +644,14 @@ def test_render_never_shows_methode_nor_environment_and_hides_short_blocks(tmp_p
     result, prs = _render(tmp_path, cv, source_pages=1)
     text = _all_text(prs)
     assert "MÉTHODE" not in text.upper() and "Environnement" not in text
-    assert "SI & outils" not in text and "EXPERTISE" in text
+    assert "SI & OUTILS" not in text and "EXPERTISE" in text
     assert any("SI & outils" in note and "non affiché" in note for note in result.notes)
+
+
+def test_render_skills_order_expertise_si_langues(tmp_path: Path):
+    _, prs = _render(tmp_path, make_cv(), source_pages=1)
+    tops = {sh.text_frame.text.split("\n")[0]: sh.top for sh in prs.slides[0].shapes if isinstance(sh, Shape)}
+    assert tops["EXPERTISE"] < tops["SI & OUTILS"] < tops["LANGUES"]
 
 
 def test_render_freelance_client_is_labelled(tmp_path: Path):

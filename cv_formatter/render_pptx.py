@@ -72,7 +72,7 @@ def q(tag: str) -> str:
 
 SHAPE_TAGS = {q("p:sp"), q("p:grpSp"), q("p:pic"), q("p:cxnSp")}
 CONTACT_FIELDS = ("email", "telephone", "localisation", "linkedin")
-RIGHT_BLOCKS = (("expertise", "EXPERTISE"), ("langues", "LANGUES"), ("si", "SI & outils"))
+RIGHT_BLOCKS = (("expertise", "EXPERTISE"), ("si", "SI & OUTILS"), ("langues", "LANGUES"))
 # Une liste de mots-clés trop courte met en avant des détails (« Scrum · AMDEC ») : en dessous de ce nombre
 # d'éléments, le bloc n'est pas affiché. Les langues, certifications et diplômes ne sont pas concernés.
 MIN_KEYWORD_ITEMS = 3
@@ -563,7 +563,7 @@ def _right_column(t: Template, cv: CV, notes: list[str]) -> None:
     réduction jusqu'à 75 %, puis retrait des éléments les moins prioritaires (signalés au rapport)."""
     expertise, si = list(cv.expertise), list(cv.outils_si)
     langues, certifications, formations = list(cv.langues), list(cv.certifications), list(cv.formations)
-    items: dict[str, ItemList] = {"expertise": expertise, "langues": langues, "si": si, "certifications": certifications, "formations": formations}
+    items: dict[str, ItemList] = {"expertise": expertise, "si": si, "langues": langues, "certifications": certifications, "formations": formations}
     for key, label in KEYWORD_BLOCKS.items():
         if 0 < len(items[key]) < MIN_KEYWORD_ITEMS:
             listed = ", ".join(_item_label(i) for i in items[key])
@@ -577,8 +577,8 @@ def _right_column(t: Template, cv: CV, notes: list[str]) -> None:
     section_boxes = {"Certifications": t.placeholders.get("certifications"), "Formation": t.placeholders.get("formation")}
     builders: dict[str, Callable[[], list[Para]]] = {
         "expertise": lambda: contenu.bullet_paras(expertise),
-        "langues": lambda: contenu.langues_paras(langues),
         "si": lambda: contenu.inline_para(si),
+        "langues": lambda: contenu.langues_paras(langues),
     }
 
     def content() -> tuple[Blocks, Sections]:

@@ -274,7 +274,7 @@ ne signale aucun débordement. C'est ce qui permet de garantir qu'un texte tient
 Elle reste **toujours sur la page 1** : police réduite jusqu'à 75 %, puis masquage des spécialités de
 formation, puis des derniers éléments des listes les plus longues (en gardant des minimums : 5 outils,
 2 certifications, 3 domaines d'expertise…). Tout ce qui est masqué est listé dans le rapport.
-Blocs : Expertise, Langues, SI & outils (logiciels, plateformes, technologies et méthodologies) ; une norme ou réglementation n'entre dans Expertise que si le CV la présente comme compétence (pas si elle est seulement citée dans une réalisation).
+Blocs, dans cet ordre et titrés en majuscules : EXPERTISE, SI & OUTILS (logiciels, plateformes, technologies et méthodologies), LANGUES ; une norme ou réglementation n'entre dans Expertise que si le CV la présente comme compétence (pas si elle est seulement citée dans une réalisation).
 Il n'y a plus de bloc Méthode (peu d'information dans la plupart des CV). Un bloc Expertise ou SI & outils de
 moins de 3 éléments n'est pas affiché (il mettrait en avant des détails).
 
@@ -530,7 +530,8 @@ Le projet a été développé avec Claude Code, par étapes, chaque étape étan
 - Une seule page ; pages de suite uniquement pour les expériences des profils très expérimentés.
 - Années d'expérience : alternance et stages exclus ; création d'entreprise comptée ; poste en cours compté
   jusqu'à aujourd'hui ; arrondi à l'année supérieure ; nombre annoncé dans le CV vérifié par les dates.
-- Libellé « SI & outils » (plus juste que « SI » pour une liste qui mélange outils et technologies).
+- Libellé « SI & outils » (plus juste que « SI » pour une liste qui mélange outils et technologies), puis ordre
+  EXPERTISE → SI & OUTILS → LANGUES, tous les libellés en majuscules (modèle mis à jour en conséquence).
 - E-mail et LinkedIn cliquables ; photo avec marges ; anonymisation ; OCR.
 - Employeur jamais déduit de l'en-tête (cas réel : CV mis en forme par Logiclever pour un consultant venant
   d'ailleurs) ; présentation « Employeur · Client : X » ; exports LinkedIn ; bloc Méthode et ligne Environnement
@@ -567,7 +568,7 @@ Le projet a été développé avec Claude Code, par étapes, chaque étape étan
     300 Mio de mémoire, d'où un job à 1 vCPU / 2 Gio.
 
 **Tests automatiques** (données fictives, aucun vrai CV) : `python -m pytest -q` après
-`pip install -r requirements-cloud.txt -r requirements-dev.txt` (94 tests, dont 2 réservés à l'image Linux).
+`pip install -r requirements-cloud.txt -r requirements-dev.txt` (95 tests, dont 2 réservés à l'image Linux).
 Ils couvrent le contrôle anti-invention (inventions retirées, vraies
 informations gardées malgré les tolérances), l'application des verdicts (y compris identifiants entre
 crochets), les années d'expérience, les décisions sur la photo, la détection de visage, la typographie, la mesure

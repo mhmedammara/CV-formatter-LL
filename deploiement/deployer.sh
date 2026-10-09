@@ -144,7 +144,7 @@ gcloud run deploy "$SERVICE" --project "$PROJET" --region "$REGION" --image "$IM
   --no-allow-unauthenticated --iap \
   --execution-environment gen2 --cpu 1 --memory 512Mi --min-instances 0 --max-instances 2 --concurrency 40 \
   --timeout 300 \
-  --set-env-vars "CV_FORMATTER_EXECUTION=cloudrun,CV_FORMATTER_JOB=${JOB},CV_FORMATTER_REGION=${REGION},CV_FORMATTER_DONNEES=/donnees,CV_FORMATTER_RETENTION_JOURS=${RETENTION}" \
+  --set-env-vars "CV_FORMATTER_EXECUTION=cloudrun,CV_FORMATTER_JOB=${JOB},CV_FORMATTER_REGION=${REGION},CV_FORMATTER_DONNEES=/donnees,CV_FORMATTER_RETENTION_JOURS=${RETENTION},CV_FORMATTER_VERSION=${VERSION}" \
   --add-volume "$VOLUME" --add-volume-mount volume=donnees,mount-path=/donnees
 # IAP appelle le service avec son propre compte de service : il doit pouvoir l'invoquer.
 gcloud beta services identity create --service iap.googleapis.com --project "$PROJET" >/dev/null

@@ -7,7 +7,9 @@ IAP. Le service ne doit jamais être déployé en accès public (--no-allow-unau
 
 from __future__ import annotations
 
+
 import datetime as dt
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -72,7 +74,7 @@ def page() -> HTMLResponse:
 
 @app.get("/api/moi")
 def moi(request: Request) -> dict[str, Any]:
-    return {"email": utilisateur(request), "version": __version__, "retention_jours": lots.RETENTION_JOURS,
+    return {"email": utilisateur(request), "version": os.environ.get("CV_FORMATTER_VERSION") or __version__, "retention_jours": lots.RETENTION_JOURS,
             "max_fichiers": lots.MAX_FICHIERS, "max_taille_mo": lots.MAX_TAILLE // (1024 * 1024)}
 
 

@@ -114,6 +114,8 @@ summary { cursor: pointer; color: var(--bleu); font-size: 14px; font-weight: 500
 .historique .quand { min-width: 170px; font-weight: 500; }
 .historique .quoi { flex: 1; color: var(--gris); }
 .vide { color: var(--gris); padding: 18px 4px; }
+.pagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 14px; color: var(--gris); font-size: 13px; }
+.pagination .bouton:disabled { opacity: .4; cursor: default; }
 footer { max-width: 1040px; margin: 0 auto; padding: 0 20px 30px; color: var(--gris); font-size: 12.5px; }
 .cache { display: none !important; }
 @media (max-width: 640px) { .historique .quand { min-width: 0; } .ligne-titre .bouton { margin-left: 0; } }
@@ -207,7 +209,7 @@ footer { max-width: 1040px; margin: 0 auto; padding: 0 20px 30px; color: var(--g
   <!-- Historique -->
   <section id="vue-historique" class="cache">
     <h1>Historique</h1>
-    <p class="sous-titre" id="historique-note">Vos lots des <span class="retention">30</span> derniers jours (ils sont ensuite supprimés automatiquement).</p>
+    <p class="sous-titre" id="historique-note">Vos lots des <span class="retention">30</span> derniers jours, du plus récent au plus ancien (ils sont ensuite supprimés automatiquement).</p>
     <div class="carte historique" id="historique"></div>
   </section>
 </main>
@@ -399,14 +401,20 @@ function carteCV(cv, lien) {
 }
 
 // ---- Historique ----------------------------------------------------------------------------------
-async function ouvrirHistorique() {
-  let lots = [];
-  try { lots = await api("/api/lots"); } catch (e) { $("#historique").innerHTML = `<div class="vide">${esc(e.message)}</div>`; return; }
+async function ouvrirHistorique(page = 1) {
+  let res;
+  try { res = await api(`/api/lots?page=${page}`); } catch (e) { $("#historique").innerHTML = `<div class="vide">${esc(e.message)}</div>`; return; }
   const etats = { termine: "terminé", en_cours: "en cours", en_attente: "en attente", echec: "échec" };
-  $("#historique").innerHTML = lots.length ? lots.map((l) => `<a href="#/lot/${l.id}"><span class="quand">${date(l.cree_le)}</span>
+  const lots = res.lots;
+  const pagination = res.pages > 1 ? `<div class="pagination">
+      <button class="bouton second petit" data-page="${res.page - 1}" ${res.page > 1 ? "" : "disabled"}>← Plus récents</button>
+      <span>Page ${res.page} sur ${res.pages} · ${res.total} lots</span>
+      <button class="bouton second petit" data-page="${res.page + 1}" ${res.page < res.pages ? "" : "disabled"}>Plus anciens →</button></div>` : "";
+  $("#historique").innerHTML = (lots.length ? lots.map((l) => `<a href="#/lot/${l.id}"><span class="quand">${date(l.cree_le)}</span>
       <span class="quoi">${l.fichiers} fichier${l.fichiers > 1 ? "s" : ""} · ${l.options.versions.map((v) => v === "anonyme" ? "anonyme" : "nominatif").join(" + ")}</span>
       <span class="badge ${l.statut === "termine" ? "ok" : l.statut === "echec" ? "echec" : "verifier"}">${etats[l.statut] || l.statut}</span></a>`).join("")
-    : `<div class="vide">Aucun lot pour l'instant.</div>`;
+    : `<div class="vide">Aucun lot pour l'instant.</div>`) + pagination;
+  $("#historique").querySelectorAll("[data-page]").forEach((b) => b.onclick = () => { ouvrirHistorique(+b.dataset.page); window.scrollTo(0, 0); });
 }
 
 // ---- Navigation ----------------------------------------------------------------------------------

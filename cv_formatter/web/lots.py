@@ -8,6 +8,8 @@ dossier, partagé par le service web et le job de traitement ; en local : un dos
     lots/<id>/statut.json     avancement du traitement                        (écrit par le job)
     lots/<id>/sortie/…        nominatif/ et anonyme/ : PPTX, PDF, rapport.md, rapport.json, photos/
     lots/<id>/sortie/resultats.zip
+    auteurs/<empreinte>.json  lots lancés par un utilisateur, du plus récent au plus ancien (historique
+                              sans parcourir les lots de tout le monde)
     cache/<sha256>.json       extractions et contre-vérifications, partagées entre lots (un CV déjà
                               traité n'est pas renvoyé à OpenAI)
 
@@ -17,6 +19,7 @@ Le bucket supprime tout automatiquement au bout de RETENTION_JOURS (règle de cy
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -132,17 +135,48 @@ def nom_de_fichier(nom: str, existants: set[str]) -> str:
     return candidat
 
 
-def lots_de(auteur: str, limite: int = 30) -> list[dict[str, Any]]:
-    """Lots récents d'un utilisateur, du plus récent au plus ancien."""
+def _index(auteur: str) -> Path:
+    return DONNEES / "auteurs" / f"{hashlib.sha256(auteur.encode()).hexdigest()[:32]}.json"
+
+
+def _ids_de(auteur: str) -> list[str]:
+    """Identifiants des lots lancés par l'utilisateur, du plus récent au plus ancien. Sans index (lots lancés
+    avant son introduction), il est construit une fois en parcourant tous les lots."""
+    data = lire_json(_index(auteur))
+    if data is not None:
+        return list(data.get("lots", []))
+    trouves: list[tuple[str, str]] = []
     racine = DONNEES / "lots"
-    if not racine.is_dir():
-        return []
+    for dossier in racine.iterdir() if racine.is_dir() else []:
+        lot = lire_json(dossier / "lot.json")
+        if lot and lot.get("auteur") == auteur and lot.get("lance_le"):
+            trouves.append((lot.get("cree_le", ""), lot["id"]))
+    ids = [i for _, i in sorted(trouves, reverse=True)]
+    ecrire_json(_index(auteur), {"lots": ids})
+    return ids
+
+
+def indexer(lot: Lot) -> None:
+    """Ajoute un lot lancé en tête de l'historique de son auteur."""
+    ids = _ids_de(lot.auteur)
+    ecrire_json(_index(lot.auteur), {"lots": [lot.id] + [i for i in ids if i != lot.id]})
+
+
+def lots_de(auteur: str, page: int = 1, par_page: int = 20) -> dict[str, Any]:
+    """Une page de l'historique d'un utilisateur ; seuls les lots de la page sont lus."""
+    ids = _ids_de(auteur)
+    pages = max(1, -(-len(ids) // par_page))
+    page = min(max(1, page), pages)
     trouves: list[dict[str, Any]] = []
-    for dossier in racine.iterdir():
-        data = lire_json(dossier / "lot.json")
-        if data and data.get("auteur") == auteur and data.get("lance_le"):
-            lot = charger(data["id"])
-            trouves.append({"id": lot.id, "cree_le": lot.cree_le, "fichiers": len(lot.fichiers),
-                            "options": asdict(lot.options), "statut": statut(lot).get("etat")})
-    trouves.sort(key=lambda d: d["cree_le"], reverse=True)
-    return trouves[:limite]
+    disparus: list[str] = []
+    for lot_id in ids[(page - 1) * par_page:page * par_page]:
+        try:
+            lot = charger(lot_id)
+        except LotIntrouvable:  # supprimé par la règle de conservation
+            disparus.append(lot_id)
+            continue
+        trouves.append({"id": lot.id, "cree_le": lot.cree_le, "fichiers": len(lot.fichiers),
+                        "options": asdict(lot.options), "statut": statut(lot).get("etat")})
+    if disparus:
+        ecrire_json(_index(auteur), {"lots": [i for i in _ids_de(auteur) if i not in disparus]})
+    return {"lots": trouves, "page": page, "pages": pages, "total": len(ids) - len(disparus)}

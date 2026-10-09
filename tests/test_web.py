@@ -59,9 +59,31 @@ def test_depot_lancement_et_historique(client: TestClient):
     assert vue["options"]["versions"] == ["anonyme"] and vue["statut"]["etat"] == "en_attente"
     assert client.lances == [lot]  # type: ignore[attr-defined]
     assert client.post(f"/api/lots/{lot}/lancer").status_code == 200 and client.lances == [lot]  # pas relancé  # type: ignore[attr-defined]
-    assert [l["id"] for l in client.get("/api/lots", headers=MOI).json()] == [lot]
+    assert [l["id"] for l in client.get("/api/lots", headers=MOI).json()["lots"]] == [lot]
     autre = {"X-Goog-Authenticated-User-Email": "accounts.google.com:autre@logiclever.com"}
-    assert client.get("/api/lots", headers=autre).json() == []
+    assert client.get("/api/lots", headers=autre).json()["lots"] == []
+
+
+def test_historique_pagine(client: TestClient):
+    ids = []
+    for _ in range(45):
+        lot = client.post("/api/lots", json={}, headers=MOI).json()["id"]
+        _deposer(client, lot, "cv.pdf")
+        client.post(f"/api/lots/{lot}/lancer", headers=MOI)
+        ids.insert(0, lot)
+    page1 = client.get("/api/lots", headers=MOI).json()
+    assert (page1["page"], page1["pages"], page1["total"]) == (1, 3, 45)
+    assert [l["id"] for l in page1["lots"]] == ids[:20]
+    assert [l["id"] for l in client.get("/api/lots?page=3", headers=MOI).json()["lots"]] == ids[40:]
+    assert client.get("/api/lots?page=9", headers=MOI).json()["page"] == 3
+    # Lot supprimé par la règle de conservation : retiré de l'historique.
+    import shutil
+    shutil.rmtree(lots.dossier_lot(ids[0]))
+    page1 = client.get("/api/lots", headers=MOI).json()
+    assert page1["total"] == 44 and page1["lots"][0]["id"] == ids[1]
+    # Index absent (lots lancés avant son introduction) : reconstruit en parcourant les lots.
+    lots._index("jeanne.commerciale@logiclever.com").unlink()
+    assert client.get("/api/lots", headers=MOI).json()["total"] == 44
 
 
 def test_regles_de_depot(client: TestClient, monkeypatch: pytest.MonkeyPatch):

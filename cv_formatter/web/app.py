@@ -77,8 +77,8 @@ def moi(request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/lots")
-def historique(request: Request) -> list[dict[str, Any]]:
-    return lots.lots_de(utilisateur(request))
+def historique(request: Request, page: int = 1) -> dict[str, Any]:
+    return lots.lots_de(utilisateur(request), page)
 
 
 @app.post("/api/lots")
@@ -155,6 +155,7 @@ async def lancer(lot_id: str, request: Request) -> dict[str, Any]:
         raise HTTPException(400, "Aucun CV déposé.")
     lot.lance_le = lots.maintenant()
     lot.enregistrer()
+    lots.indexer(lot)
     lots.ecrire_statut(lot_id, "en_attente")
     try:
         lancement.lancer(lot_id)

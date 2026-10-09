@@ -54,7 +54,7 @@ Tout s'arrête quand personne ne s'en sert (aucune instance permanente, pas d'é
 | Service web | 0 € : part gratuite (180 000 vCPU-s, 2 millions de requêtes) |
 | Stockage (≈ 0,4 Go, 30 jours) et opérations | ≈ 0,02 € |
 | Images (2 versions ≈ 0,35 Go, couches communes) | 0 € : part gratuite de 0,5 Go |
-| Cloud Build (≈ 6 min par déploiement) | 0 € : 2 500 min gratuites par mois |
+| Cloud Build (≈ 6 min la première fois, 1 à 2 min ensuite) | 0 € : 2 500 min gratuites par mois |
 | IAP, Secret Manager, journaux | 0 € |
 | **API OpenAI (gpt-6-luna)** | **≈ 0,01 $ par CV, soit ≈ 2 $** — le seul vrai coût |
 
@@ -77,7 +77,7 @@ gcloud config set project MON-PROJET
 bash deploiement/deployer.sh
 ```
 
-Le script active les API, crée le dépôt d'images, construit l'image (≈ 6 min), crée le bucket et sa règle de
+Le script active les API, crée le dépôt d'images, construit l'image (≈ 6 min la première fois ; ensuite 1 à 2 min, les couches LibreOffice et Python étant reprises de l'image précédente), crée le bucket et sa règle de
 suppression, demande la clé OpenAI (une seule fois, saisie masquée, stockée dans Secret Manager), crée les deux
 comptes de service et leurs droits, déploie le job puis le service, et réserve l'accès au domaine. Il affiche
 l'adresse à donner à l'équipe.

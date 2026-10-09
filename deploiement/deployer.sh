@@ -69,7 +69,27 @@ gcloud artifacts repositories set-cleanup-policies "$DEPOT" --location "$REGION"
   --policy /tmp/nettoyage-images.json --no-dry-run >/dev/null
 
 etape "3/8 Construction de l'image (Cloud Build) : ${IMAGE}"
-gcloud builds submit --project "$PROJET" --tag "$IMAGE" .
+# Déjà construite pour cette version (relance après un échec plus loin) : rien à refaire.
+if gcloud artifacts docker images describe "$IMAGE" --project "$PROJET" >/dev/null 2>&1; then
+  echo "Image déjà construite pour la version ${VERSION}."
+else
+  # Cloud Build ne garde rien d'une construction à l'autre : on repart de l'image précédente (« derniere »), dont
+  # les couches LibreOffice et Python sont réutilisées tant que le Dockerfile et les dépendances n'ont pas changé.
+  # Une modification du code seul ne reconstruit que la dernière couche (≈ 1 à 2 min au lieu de 6).
+  DERNIERE="${REGION}-docker.pkg.dev/${PROJET}/${DEPOT}/cv-formatter:derniere"
+  cat > /tmp/cloudbuild-cv.yaml <<YAML
+steps:
+- name: gcr.io/cloud-builders/docker
+  entrypoint: bash
+  args: ['-c', 'docker pull ${DERNIERE} || true']
+- name: gcr.io/cloud-builders/docker
+  env: ['DOCKER_BUILDKIT=1']
+  args: ['build', '--cache-from', '${DERNIERE}', '--build-arg', 'BUILDKIT_INLINE_CACHE=1',
+         '-t', '${IMAGE}', '-t', '${DERNIERE}', '.']
+images: ['${IMAGE}', '${DERNIERE}']
+YAML
+  gcloud builds submit --project "$PROJET" --config /tmp/cloudbuild-cv.yaml .
+fi
 
 etape "4/8 Bucket des lots (suppression automatique après ${RETENTION} jours)"
 if ! gcloud storage buckets describe "gs://${BUCKET}" --project "$PROJET" >/dev/null 2>&1; then

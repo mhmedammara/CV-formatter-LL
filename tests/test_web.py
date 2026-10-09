@@ -108,6 +108,10 @@ def test_telechargement_limite_au_lot(client: TestClient):
     (lots.DONNEES / "cache" / "secret.json").write_text("{}")
     ok = client.get(f"/api/lots/{lot}/resultats/nominatif/CV%20Logiclever%20-%20Jean%20DUPONT.pdf?apercu=1")
     assert ok.status_code == 200 and ok.content == PDF and ok.headers["content-disposition"].startswith("inline")
+    nomme = client.get(f"/api/lots/{lot}/resultats/nominatif/CV%20Logiclever%20-%20Jean%20DUPONT.pdf?nom=Jean.pdf")
+    assert 'filename="Jean.pdf"' in nomme.headers["content-disposition"]
+    autre_ext = client.get(f"/api/lots/{lot}/resultats/nominatif/CV%20Logiclever%20-%20Jean%20DUPONT.pdf?nom=..%2Fx.exe")
+    assert "x.exe" not in autre_ext.headers["content-disposition"]
     for chemin in ("../lot.json", "..%2F..%2F..%2Fcache%2Fsecret.json", "nominatif/../../lot.json"):
         assert client.get(f"/api/lots/{lot}/resultats/{chemin}").status_code == 404
     assert client.get("/api/lots/0123456789abcdef0123456789abcdef").status_code == 404

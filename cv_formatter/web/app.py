@@ -173,10 +173,14 @@ def _fichier_du_lot(lot: lots.Lot, chemin: str) -> Path:
 
 
 @app.get("/api/lots/{lot_id}/resultats/{chemin:path}")
-def telecharger(lot_id: str, chemin: str, apercu: bool = False) -> FileResponse:
+def telecharger(lot_id: str, chemin: str, apercu: bool = False, nom: str = "") -> FileResponse:
     lot = _lot(lot_id)
     cible = _fichier_du_lot(lot, chemin)
-    nom = cible.name if cible.name != "resultats.zip" else f"CV Logiclever - {lot.cree_le[:10]}.zip"
+    if nom:  # nom proposé au téléchargement (photo nommée d'après le CV), même extension que le fichier
+        nom = lots.nom_de_fichier(nom, set())
+        nom = nom if nom.lower().endswith(cible.suffix.lower()) else cible.name
+    else:
+        nom = cible.name if cible.name != "resultats.zip" else f"CV Logiclever - {lot.cree_le[:10]}.zip"
     return FileResponse(cible, filename=nom, content_disposition_type="inline" if apercu else "attachment")
 
 

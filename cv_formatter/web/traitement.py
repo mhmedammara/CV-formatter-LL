@@ -94,10 +94,17 @@ def traiter(lot_id: str) -> int:
                 codes.append(run(parse_args(arguments), progress=avancement))
         copies = _copier_resultats(travail / "sortie", sortie_lot)
     # Archive de tout le lot : PPTX, PDF, rapports et photos du rapport, rangés par version.
+    # Photo retenue : nommée d'après le CV (« CV Logiclever - Jean DUPONT.jpg ») plutôt que l'empreinte du fichier.
+    noms_photos: dict[Path, Path] = {}
+    for version in versions:
+        for cv in (lots.lire_json(sortie_lot / version / "rapport.json") or {}).get("cv", []):
+            if cv.get("photo_fichier") and cv.get("pptx") and not cv.get("photo_retiree"):
+                noms_photos[Path(version, cv["photo_fichier"])] = Path(version, Path(cv["pptx"]).with_suffix(".jpg"))
     with zipfile.ZipFile(sortie_lot / "resultats.zip", "w", zipfile.ZIP_DEFLATED) as archive:
         for relatif in copies:
             if relatif.name != "rapport.json":
-                archive.write(sortie_lot / relatif, f"{lots.VERSIONS[relatif.parts[0]]}/{Path(*relatif.parts[1:])}")
+                dans_zip = noms_photos.get(relatif, relatif)
+                archive.write(sortie_lot / relatif, f"{lots.VERSIONS[dans_zip.parts[0]]}/{Path(*dans_zip.parts[1:])}")
         for depose in sorted((lot.dossier / "entree").iterdir()):
             if depose.is_file():
                 archive.write(depose, f"CV d'origine/{depose.name}")

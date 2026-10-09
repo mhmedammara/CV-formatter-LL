@@ -391,6 +391,7 @@ function carteCV(cv, lien) {
       <div class="liens">${cv.pdf ? `<a class="bouton second petit" href="${lien(cv.pdf, true)}" target="_blank" rel="noopener">PDF</a>` : ""}
         ${cv.pptx ? `<a class="bouton second petit" href="${lien(cv.pptx)}">PowerPoint</a>` : ""}
         ${cv.json ? `<a class="bouton second petit" href="${lien(cv.json, true)}" target="_blank" rel="noopener">JSON</a>` : ""}
+        ${cv.photo_fichier && !cv.photo_retiree && cv.pptx ? `<a class="bouton second petit" href="${lien(cv.photo_fichier)}${lien(cv.photo_fichier).includes("?") ? "&" : "?"}nom=${encodeURIComponent(cv.pptx.replace(/\.pptx$/i, ".jpg"))}">Photo</a>` : ""}
         ${original(cv.source)}</div></div>
     <details><summary>Détail du contrôle</summary><div class="detail">
       ${liste("À vérifier", cv.a_verifier, element)}

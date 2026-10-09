@@ -16,13 +16,14 @@
   --vert: #138a52; --vert-pale: #e7f6ee; --rouge: #c0322b; --rouge-pale: #fdecea; --ambre: #a35c00; --ambre-pale: #fff4e0;
 }
 * { box-sizing: border-box; }
+button, input, select, textarea { font-family: inherit; }
 body { margin: 0; font-family: Lexend, system-ui, sans-serif; color: var(--encre); background: var(--fond); font-size: 15px; line-height: 1.5; }
 a { color: var(--bleu); }
 header { background: var(--carte); border-bottom: 1px solid var(--trait); }
 .barre { max-width: 1040px; margin: 0 auto; padding: 14px 20px; display: flex; align-items: center; gap: 14px; }
 .marque { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; text-decoration: none; color: var(--encre); }
-.marque i { width: 30px; height: 30px; border-radius: 8px; background: var(--orange); display: grid; place-items: center; color: #fff; font-style: normal; font-weight: 700; }
-.marque span { color: var(--gris); font-weight: 400; }
+.marque img { height: 46px; width: auto; display: block; }
+.marque span { color: var(--gris); font-weight: 500; padding-left: 12px; border-left: 1px solid var(--trait); }
 nav { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 nav a { text-decoration: none; padding: 7px 12px; border-radius: 8px; color: var(--encre); font-weight: 500; }
 nav a.actif, nav a:hover { background: var(--bleu-pale); color: var(--bleu); }
@@ -121,7 +122,7 @@ footer { max-width: 1040px; margin: 0 auto; padding: 0 20px 30px; color: var(--g
 <body>
 <header>
   <div class="barre">
-    <a class="marque" href="#/"><i>L</i>CV Formatter <span>Logiclever</span></a>
+    <a class="marque" href="#/"><img src="/static/logo-logiclever.png" alt="Logiclever — Free to do better"><span>CV Formatter</span></a>
     <nav>
       <a href="#/" id="nav-nouveau">Nouveau lot</a>
       <a href="#/historique" id="nav-historique">Historique</a>

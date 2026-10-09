@@ -87,6 +87,9 @@ legend { font-weight: 600; margin-bottom: 8px; }
 .progression { height: 10px; border-radius: 10px; background: var(--trait); overflow: hidden; }
 .progression b { display: block; height: 100%; background: linear-gradient(90deg, var(--orange), #ff8a5c); width: 0; transition: width .6s; }
 .progression.indetermine b { width: 35%; animation: va 1.4s infinite ease-in-out; }
+.chargement { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 40px 0; color: var(--gris); }
+.spinner { width: 22px; height: 22px; border: 3px solid var(--trait); border-top-color: var(--orange); border-radius: 50%; animation: tourne .8s linear infinite; }
+@keyframes tourne { to { transform: rotate(360deg); } }
 @keyframes va { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
 .ligne-titre { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .ligne-titre h2 { margin: 0; }
@@ -317,12 +320,20 @@ $("#lancer").addEventListener("click", async () => {
 });
 
 // ---- Suivi et résultats d'un lot -----------------------------------------------------------------
-async function ouvrirLot(id) {
+async function ouvrirLot(id, suiviAuto = false) {
   clearTimeout(suivi);
+  if (!suiviAuto) {  // ouverture : rien du lot précédent ne reste affiché pendant le chargement
+    $("#lot-titre").textContent = "Lot";
+    $("#lot-message").innerHTML = "";
+    $("#lot-avancement").classList.add("cache");
+    $("#lot-resultats").innerHTML = CHARGEMENT;
+  }
   let vue;
   try { vue = await api(`/api/lots/${id}`); }
-  catch (e) { $("#lot-titre").textContent = "Lot introuvable"; $("#lot-message").innerHTML = `<div class="alerte erreur">${esc(e.message)}</div>`;
+  catch (e) {
+    if (location.hash !== `#/lot/${id}`) return; $("#lot-titre").textContent = "Lot introuvable"; $("#lot-message").innerHTML = `<div class="alerte erreur">${esc(e.message)}</div>`;
               $("#lot-avancement").classList.add("cache"); $("#lot-resultats").innerHTML = ""; return; }
+  if (location.hash !== `#/lot/${id}`) return;  // l'utilisateur est passé à une autre page entre-temps
   const s = vue.statut, nb = vue.fichiers.length;
   $("#lot-titre").textContent = `Lot du ${date(vue.lance_le || vue.cree_le)} — ${nb} fichier${nb > 1 ? "s" : ""}`;
   const actif = s.etat === "en_attente" || s.etat === "en_cours";
@@ -332,7 +343,7 @@ async function ouvrirLot(id) {
     : actif && s.silence_min >= 15 ? `<div class="alerte attention">Pas de nouvelles du traitement depuis ${s.silence_min} minutes : s'il n'avance plus, relancez les CV dans un nouveau lot.</div>` : "";
   if (actif) {
     afficherAvancement(s);
-    suivi = setTimeout(() => { if (location.hash === `#/lot/${id}`) ouvrirLot(id); }, 3000);
+    suivi = setTimeout(() => { if (location.hash === `#/lot/${id}`) ouvrirLot(id, true); }, 3000);
   }
   afficherResultats(vue);
 }
@@ -404,10 +415,17 @@ function carteCV(cv, lien) {
     </div></details></div>`;
 }
 
+const CHARGEMENT = `<div class="chargement" role="status"><span class="spinner"></span>Chargement…</div>`;
+let demandeHistorique = 0;
+
 // ---- Historique ----------------------------------------------------------------------------------
 async function ouvrirHistorique(page = 1) {
+  const demande = ++demandeHistorique;
+  $("#historique").innerHTML = CHARGEMENT;
   let res;
-  try { res = await api(`/api/lots?page=${page}`); } catch (e) { $("#historique").innerHTML = `<div class="vide">${esc(e.message)}</div>`; return; }
+  try { res = await api(`/api/lots?page=${page}`); }
+  catch (e) { if (demande === demandeHistorique) $("#historique").innerHTML = `<div class="vide">${esc(e.message)}</div>`; return; }
+  if (demande !== demandeHistorique || location.hash !== "#/historique") return;  // réponse dépassée
   const etats = { termine: "terminé", en_cours: "en cours", en_attente: "en attente", echec: "échec" };
   const lots = res.lots;
   const pagination = res.pages > 1 ? `<div class="pagination">

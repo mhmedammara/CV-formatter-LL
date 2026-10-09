@@ -319,6 +319,8 @@ function afficherAvancement(s) {
 function afficherResultats(vue) {
   const versions = Object.keys(vue.rapports);
   if (!versions.length) { $("#lot-resultats").innerHTML = ""; return; }
+  originaux = new Set((vue.fichiers || []).map((f) => f.nom));
+  lienOriginal = (nom, apercu) => `/api/lots/${vue.id}/originaux/${encodeURIComponent(nom)}${apercu ? "?apercu=1" : ""}`;
   const lien = (chemin, apercu) => `/api/lots/${vue.id}/resultats/${chemin.split("/").map(encodeURIComponent).join("/")}${apercu ? "?apercu=1" : ""}`;
   let html = `<div class="carte"><div class="ligne-titre"><h2>Résultats</h2>${vue.zip ? `<a class="bouton principal" href="${lien("resultats.zip")}">Tout télécharger (.zip)</a>` : ""}</div>
     <div class="alerte info">Relisez les points « à vérifier » avant tout envoi à un client.</div>`;
@@ -330,9 +332,14 @@ function afficherResultats(vue) {
   $("#lot-resultats").innerHTML = html + "</div>";
 }
 
+let originaux = new Set(), lienOriginal = () => "";
+// Bouton vers le CV déposé (pas pour un CV extrait d'un .zip : l'archive entière reste dans le .zip du lot).
+const original = (source) => originaux.has(source)
+  ? `<a class="bouton second petit" href="${lienOriginal(source, /\.(pdf|png|jpe?g|webp)$/i.test(source))}" target="_blank" rel="noopener">Original</a>` : "";
 function carteCV(cv, lien) {
   if (cv.erreur) return `<div class="cv"><div class="cv-haut"><div class="ident"><strong>${esc(cv.source)}</strong><small>${esc(cv.erreur)}</small></div>
-    <div class="badges"><span class="badge echec">Échec</span></div></div></div>`;
+    <div class="badges"><span class="badge echec">Échec</span></div>
+    <div class="liens">${original(cv.source)}</div></div></div>`;
   const verifier = cv.a_verifier.length, retires = cv.retires.length, alertes = cv.avertissements.length;
   const badges = [
     verifier ? `<span class="badge verifier">${verifier} à vérifier</span>` : "",
@@ -348,7 +355,8 @@ function carteCV(cv, lien) {
       <div class="ident"><strong>${esc(cv.nom)}</strong><small>${esc(cv.source)} · ${cv.pages} page${cv.pages > 1 ? "s" : ""}</small></div>
       <div class="badges">${badges}</div>
       <div class="liens">${cv.pdf ? `<a class="bouton second petit" href="${lien(cv.pdf, true)}" target="_blank" rel="noopener">PDF</a>` : ""}
-        ${cv.pptx ? `<a class="bouton second petit" href="${lien(cv.pptx)}">PowerPoint</a>` : ""}</div></div>
+        ${cv.pptx ? `<a class="bouton second petit" href="${lien(cv.pptx)}">PowerPoint</a>` : ""}
+        ${original(cv.source)}</div></div>
     <details><summary>Détail du contrôle</summary><div class="detail">
       ${liste("À vérifier", cv.a_verifier, element)}
       ${liste("Retiré ou corrigé (non prouvé par le CV d'origine)", cv.retires, element)}

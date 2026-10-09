@@ -179,6 +179,16 @@ def telecharger(lot_id: str, chemin: str, apercu: bool = False) -> FileResponse:
     return FileResponse(cible, filename=nom, content_disposition_type="inline" if apercu else "attachment")
 
 
+@app.get("/api/lots/{lot_id}/originaux/{nom}")
+def original(lot_id: str, nom: str, apercu: bool = False) -> FileResponse:
+    """CV tel qu'il a été déposé (conservé avec le lot)."""
+    lot = _lot(lot_id)
+    cible = lot.dossier / "entree" / nom
+    if nom not in {f["nom"] for f in lot.fichiers} or not cible.is_file():
+        raise HTTPException(404, "Fichier introuvable.")
+    return FileResponse(cible, filename=nom, content_disposition_type="inline" if apercu else "attachment")
+
+
 @app.exception_handler(lots.LotIntrouvable)
 def _introuvable(_: Request, __: lots.LotIntrouvable) -> JSONResponse:
     return JSONResponse({"detail": "Lot introuvable."}, status_code=404)

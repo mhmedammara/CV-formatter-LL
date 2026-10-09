@@ -98,6 +98,9 @@ def traiter(lot_id: str) -> int:
         for relatif in copies:
             if relatif.suffix.lower() != ".json":
                 archive.write(sortie_lot / relatif, f"{lots.VERSIONS[relatif.parts[0]]}/{Path(*relatif.parts[1:])}")
+        for depose in sorted((lot.dossier / "entree").iterdir()):
+            if depose.is_file():
+                archive.write(depose, f"CV d'origine/{depose.name}")
     reussi = all(code in (0, 1) for code in codes)  # 1 : au moins un CV en échec (détaillé dans le rapport)
     lots.ecrire_statut(lot_id, "termine" if reussi else "echec", **({} if reussi else {"message": "aucun CV n'a pu être traité"}))
     print(f"lot {lot_id} : {len(lot.fichiers)} fichier(s), versions {'+'.join(versions)}, codes {codes}")

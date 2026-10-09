@@ -89,6 +89,10 @@ def test_telechargement_limite_au_lot(client: TestClient):
     for chemin in ("../lot.json", "..%2F..%2F..%2Fcache%2Fsecret.json", "nominatif/../../lot.json"):
         assert client.get(f"/api/lots/{lot}/resultats/{chemin}").status_code == 404
     assert client.get("/api/lots/0123456789abcdef0123456789abcdef").status_code == 404
+    _deposer(client, lot, "cv.pdf")
+    assert client.get(f"/api/lots/{lot}/originaux/cv.pdf").content == PDF
+    for nom in ("..%2Flot.json", "lot.json", "autre.pdf"):
+        assert client.get(f"/api/lots/{lot}/originaux/{nom}").status_code == 404
     assert client.get("/api/lots/..%2F..%2Fcache").status_code == 404
 
 
@@ -137,6 +141,7 @@ def test_job_traite_un_lot_sans_appel_api(tmp_path: Path, monkeypatch: pytest.Mo
     with zipfile.ZipFile(sortie / "resultats.zip") as archive:
         noms = archive.namelist()
     assert "CV nominatifs/CV Logiclever - Jean DUPONT.pptx" in noms and "CV anonymes/rapport.md" in noms
+    assert any(n.startswith("CV d'origine/") for n in noms)
     assert not any(n.endswith(".json") for n in noms)
 
 

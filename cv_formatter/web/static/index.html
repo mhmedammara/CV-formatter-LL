@@ -64,6 +64,15 @@ legend { font-weight: 600; margin-bottom: 8px; }
 .bouton.second:hover { background: #dfe2fb; }
 .bouton.petit { padding: 6px 12px; font-size: 13px; border-radius: 8px; }
 .note { color: var(--gris); font-size: 13px; }
+.comparatif { margin-top: 14px; font-size: 13px; }
+.comparatif summary { cursor: pointer; color: var(--gris); }
+.comparatif table { border-collapse: collapse; margin: 10px 0; width: 100%; }
+.comparatif th, .comparatif td { border: 1px solid var(--trait); padding: 6px 8px; text-align: center; }
+.comparatif th:first-child, .comparatif td:first-child { text-align: left; }
+.comparatif th { background: var(--fond); font-weight: 600; }
+.comparatif td.non { color: var(--gris); }
+.comparatif ul { margin: 6px 0 0; padding-left: 18px; }
+@media (max-width: 600px) { .comparatif { overflow-x: auto; } }
 .alerte { border-radius: 10px; padding: 12px 14px; margin: 0 0 16px; }
 .alerte.info { background: var(--bleu-pale); color: #1a237e; }
 .alerte.attention { background: var(--ambre-pale); color: var(--ambre); }
@@ -149,6 +158,26 @@ footer { max-width: 1040px; margin: 0 auto; padding: 0 20px 30px; color: var(--g
           <span>Retirer les coordonnées<small>E-mail, téléphone, ville et LinkedIn ne figurent pas sur le CV (le nom et la photo restent, sauf en version anonyme).</small></span>
         </label>
       </div>
+      <details class="comparatif">
+        <summary>Anonyme ou « Retirer les coordonnées » : quelle différence ?</summary>
+        <p>La version <strong>anonyme</strong> cache <em>qui</em> est le consultant ; « Retirer les coordonnées » cache seulement
+          <em>comment le joindre</em>, le CV restant à son nom.</p>
+        <table>
+          <thead><tr><th>Sur le CV</th><th>Nominative</th><th>Nominative<br>sans coordonnées</th><th>Anonyme</th><th>Anonyme<br>sans coordonnées</th></tr></thead>
+          <tbody>
+            <tr><td>Prénom et nom</td><td>oui</td><td>oui</td><td>initiales (J. D.)</td><td>initiales</td></tr>
+            <tr><td>Photo</td><td>oui</td><td>oui</td><td class="non">non</td><td class="non">non</td></tr>
+            <tr><td>E-mail, téléphone, LinkedIn</td><td>oui</td><td class="non">non</td><td class="non">non</td><td class="non">non</td></tr>
+            <tr><td>Ville</td><td>oui</td><td class="non">non</td><td>oui</td><td class="non">non</td></tr>
+          </tbody>
+        </table>
+        <ul>
+          <li><strong>Nominative sans coordonnées</strong> : le cas courant pour un client — il voit qui est le consultant, mais
+            ne peut pas le contacter sans passer par Logiclever.</li>
+          <li><strong>Anonyme</strong> : quand le client ne doit pas savoir de qui il s'agit (présélection, consultant encore en poste).</li>
+          <li>Avec « Les deux », la case s'applique aux deux versions ; sur la version anonyme, elle ne retire que la ville.</li>
+        </ul>
+      </details>
 
       <div class="actions">
         <button class="bouton principal" id="lancer" disabled>Lancer la mise au format</button>

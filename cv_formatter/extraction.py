@@ -125,6 +125,22 @@ def make_client() -> OpenAI:
     return OpenAI(timeout=900, max_retries=3)
 
 
+def message_erreur_api(exc: Exception) -> str:
+    """Erreur OpenAI en français, compréhensible par l'équipe commerciale."""
+    import openai
+
+    if isinstance(exc, openai.RateLimitError):
+        if getattr(exc, "code", None) == "insufficient_quota" or "quota" in str(exc).lower():
+            return ("crédit OpenAI épuisé : prévenez l'administrateur (recharger le compte OpenAI), "
+                    "puis relancez ce CV dans un nouveau lot")
+        return "OpenAI est saturé pour le moment : relancez ce CV dans un nouveau lot d'ici quelques minutes"
+    if isinstance(exc, (openai.AuthenticationError, openai.PermissionDeniedError)):
+        return "clé OpenAI refusée (invalide ou révoquée) : prévenez l'administrateur"
+    if isinstance(exc, (openai.APIConnectionError, openai.InternalServerError)):
+        return "OpenAI injoignable ou en panne : relancez ce CV dans un nouveau lot un peu plus tard"
+    return str(exc)
+
+
 def pdf_part(source: SourceDocument) -> ResponseInputFileParam:
     data = base64.b64encode(source.pdf_bytes).decode("ascii")
     return {

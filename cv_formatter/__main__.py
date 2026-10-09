@@ -22,7 +22,7 @@ from .anonymisation import anonymize, initials
 from .config import DATA_DIR, DEFAULT_EFFORT, DEFAULT_MODEL, DEFAULT_OUTPUT_DIR, EFFORT_CHOICES, INPUT_DIR, TEMPLATE_PATH
 from .controle import CONTROLE_VERSION, apply_verdicts, fingerprint, fingerprint_data, photo_verdict, run_cross_check, verdicts_from_json, verdicts_to_json
 from .export_pdf import embed_fonts, export_pdfs
-from .extraction import EXTRACTION_VERSION, api_key_available, extract_cv, make_client
+from .extraction import EXTRACTION_VERSION, api_key_available, extract_cv, make_client, message_erreur_api
 from .pdf_source import SUPPORTED_SUFFIXES, SourceDocument, load_source, save_photo, square_photo
 from .rapport import CVReport, write_report, write_report_json
 from .render_pptx import display_name, render_cv
@@ -324,7 +324,7 @@ def run(args: argparse.Namespace, progress: Progress | None = None) -> int:
             try:
                 cv, stats = extract_cv(api, source, args.modele, args.effort)
             except Exception as exc:
-                job.report.error = f"extraction impossible : {exc}"
+                job.report.error = f"extraction impossible : {message_erreur_api(exc)}"
                 return
             job.cv = cv
             job.stats = stats
@@ -375,7 +375,7 @@ def run(args: argparse.Namespace, progress: Progress | None = None) -> int:
             try:
                 verdicts = run_cross_check(checker, job.source, job.cv, args.modele, args.effort)
             except Exception as exc:
-                job.report.warnings.append(f"Contre-vérification impossible : {exc}")
+                job.report.warnings.append(f"Contre-vérification impossible : {message_erreur_api(exc)}")
                 return
             job.stored["controle"] = {
                 "version": CONTROLE_VERSION,

@@ -207,14 +207,14 @@ footer { max-width: 1040px; margin: 0 auto; padding: 0 20px 30px; color: var(--g
   <!-- Historique -->
   <section id="vue-historique" class="cache">
     <h1>Historique</h1>
-    <p class="sous-titre">Vos lots des <span class="retention">30</span> derniers jours (ils sont ensuite supprimés automatiquement).</p>
+    <p class="sous-titre" id="historique-note">Vos lots des <span class="retention">30</span> derniers jours (ils sont ensuite supprimés automatiquement).</p>
     <div class="carte historique" id="historique"></div>
   </section>
 </main>
 
 <footer>
   Les CV sont analysés par le modèle d'OpenAI (sans conservation des données) puis mis en page sur les serveurs
-  Logiclever (Google Cloud, Paris). Fichiers supprimés automatiquement après <span class="retention">30</span> jours.
+  Logiclever (Google Cloud, Paris). <span id="retention-pied">Fichiers supprimés automatiquement après <span class="retention">30</span> jours.</span>
   <span id="version"></span>
 </footer>
 
@@ -425,6 +425,10 @@ api("/api/moi").then((moi) => {
   config = moi;
   $("#qui").textContent = moi.email === "local" ? "" : moi.email;
   document.querySelectorAll(".retention").forEach((e) => e.textContent = moi.retention_jours);
+  if (!moi.retention_jours) {  // 0 : conservation sans limite
+    $("#historique-note").textContent = "Vos lots les plus récents.";
+    $("#retention-pied").textContent = "Fichiers conservés.";
+  }
   $("#version").textContent = `· version ${moi.version}`;
 }).catch(() => {});
 router();

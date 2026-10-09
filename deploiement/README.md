@@ -82,7 +82,7 @@ suppression, demande la clé OpenAI (une seule fois, saisie masquée, stockée d
 comptes de service et leurs droits, déploie le job puis le service, et réserve l'accès au domaine. Il affiche
 l'adresse à donner à l'équipe.
 
-Paramètres facultatifs : `REGION=… DOMAINE=… BUCKET=… RETENTION=… bash deploiement/deployer.sh`.
+Paramètres facultatifs : `REGION=… DOMAINE=… BUCKET=… RETENTION=… bash deploiement/deployer.sh` (`RETENTION=0` : conservation sans limite ; à relancer avec la même valeur à chaque mise à jour).
 
 **Mettre à jour** : `git pull` puis relancer `bash deploiement/deployer.sh` (les éléments existants sont
 conservés ; seule l'image change).

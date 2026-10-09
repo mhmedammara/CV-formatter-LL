@@ -9,7 +9,7 @@
 #   REGION     région                           (défaut : europe-west9, Paris — tarif « Tier 1 »)
 #   DOMAINE    domaine Google Workspace autorisé (défaut : logiclever.com)
 #   BUCKET     bucket des lots et du cache      (défaut : <projet>-cv-formatter)
-#   RETENTION  jours de conservation des lots   (défaut : 30)
+#   RETENTION  jours de conservation des lots   (défaut : 30 ; 0 = sans limite)
 set -euo pipefail
 
 PROJET="${PROJET:-$(gcloud config get-value project 2>/dev/null)}"
@@ -91,15 +91,19 @@ YAML
   gcloud builds submit --project "$PROJET" --config /tmp/cloudbuild-cv.yaml .
 fi
 
-etape "4/8 Bucket des lots (suppression automatique après ${RETENTION} jours)"
+etape "4/8 Bucket des lots (conservation : ${RETENTION} jours, 0 = sans limite)"
 if ! gcloud storage buckets describe "gs://${BUCKET}" --project "$PROJET" >/dev/null 2>&1; then
   gcloud storage buckets create "gs://${BUCKET}" --project "$PROJET" --location "$REGION" \
     --uniform-bucket-level-access --public-access-prevention
 fi
-cat > /tmp/cycle-de-vie.json <<JSON
+if [ "$RETENTION" = "0" ]; then
+  gcloud storage buckets update "gs://${BUCKET}" --clear-lifecycle >/dev/null
+else
+  cat > /tmp/cycle-de-vie.json <<JSON
 {"rule": [{"action": {"type": "Delete"}, "condition": {"age": ${RETENTION}}}]}
 JSON
-gcloud storage buckets update "gs://${BUCKET}" --lifecycle-file /tmp/cycle-de-vie.json >/dev/null
+  gcloud storage buckets update "gs://${BUCKET}" --lifecycle-file /tmp/cycle-de-vie.json >/dev/null
+fi
 
 etape "5/8 Clé OpenAI (Secret Manager)"
 if ! gcloud secrets describe "$SECRET" --project "$PROJET" >/dev/null 2>&1; then
@@ -152,4 +156,4 @@ gcloud iap web add-iam-policy-binding --project "$PROJET" --region "$REGION" \
 
 URL="$(gcloud run services describe "$SERVICE" --project "$PROJET" --region "$REGION" --format 'value(status.url)')"
 printf '\n\033[1;32mDéployé (version %s).\033[0m Adresse à partager avec l'"'"'équipe : %s\n' "$VERSION" "$URL"
-echo "Accès : comptes Google @${DOMAINE}. Lots et cache supprimés au bout de ${RETENTION} jours."
+echo "Accès : comptes Google @${DOMAINE}. Conservation des lots et du cache : ${RETENTION} jours (0 = sans limite)."

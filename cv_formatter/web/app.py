@@ -36,8 +36,8 @@ def _lot(lot_id: str) -> lots.Lot:
     try:
         return lots.charger(lot_id)
     except lots.LotIntrouvable:
-        raise HTTPException(404, "Lot introuvable (les lots sont supprimés au bout de "
-                                 f"{lots.RETENTION_JOURS} jours).") from None
+        raise HTTPException(404, "Lot introuvable" + (f" (les lots sont supprimés au bout de {lots.RETENTION_JOURS} jours)."
+                                                      if lots.RETENTION_JOURS else ".")) from None
 
 
 def _vue(lot: lots.Lot) -> dict[str, Any]:

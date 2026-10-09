@@ -35,6 +35,15 @@ IMAGE="${REGION}-docker.pkg.dev/${PROJET}/${DEPOT}/cv-formatter:${VERSION}"
 # Dossiers implicites (défaut de Cloud Run, rendu explicite) : la règle de suppression à 30 jours peut effacer
 # les marqueurs de dossier sans masquer les lots récents. uid/gid : utilisateur « app » de l'image.
 VOLUME="name=donnees,type=cloud-storage,bucket=${BUCKET},mount-options=implicit-dirs=true;metadata-cache-ttl-secs=0;uid=1000;gid=1000"
+# Un compte de service ou une API tout juste créés mettent jusqu'à une minute à être visibles partout : on réessaie.
+reessayer() {
+  local essai
+  for essai in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    "$@" && return 0
+    echo "  … pas encore prêt, nouvel essai dans 10 s (${essai}/12)"; sleep 10
+  done
+  "$@"
+}
 etape() { printf '\n\033[1;33m== %s\033[0m\n' "$*"; }
 
 echo "Projet ${PROJET} (n° ${NUMERO}) · région ${REGION} · domaine ${DOMAINE} · bucket ${BUCKET} · conservation ${RETENTION} j"
@@ -60,7 +69,7 @@ gcloud artifacts repositories set-cleanup-policies "$DEPOT" --location "$REGION"
   --policy /tmp/nettoyage-images.json --no-dry-run >/dev/null
 
 etape "3/8 Construction de l'image (Cloud Build) : ${IMAGE}"
-gcloud builds submit --project "$PROJET" --tag "$IMAGE" .
+reessayer gcloud builds submit --project "$PROJET" --tag "$IMAGE" .
 
 etape "4/8 Bucket des lots (suppression automatique après ${RETENTION} jours)"
 if ! gcloud storage buckets describe "gs://${BUCKET}" --project "$PROJET" >/dev/null 2>&1; then
@@ -88,10 +97,10 @@ for SA in "$SA_WEB" "$SA_JOB"; do
     || gcloud iam service-accounts create "$SA" --project "$PROJET" --display-name "CV Formatter (${SA#cv-formatter-})"
 done
 for COMPTE in "$COMPTE_WEB" "$COMPTE_JOB"; do
-  gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" --member "serviceAccount:${COMPTE}" \
+  reessayer gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" --member "serviceAccount:${COMPTE}" \
     --role roles/storage.objectUser >/dev/null
 done
-gcloud secrets add-iam-policy-binding "$SECRET" --project "$PROJET" --member "serviceAccount:${COMPTE_JOB}" \
+reessayer gcloud secrets add-iam-policy-binding "$SECRET" --project "$PROJET" --member "serviceAccount:${COMPTE_JOB}" \
   --role roles/secretmanager.secretAccessor >/dev/null
 
 etape "7/8 Job de traitement des lots (${JOB})"
@@ -102,7 +111,7 @@ gcloud run jobs deploy "$JOB" --project "$PROJET" --region "$REGION" --image "$I
   --set-env-vars CV_FORMATTER_DONNEES=/donnees \
   --cpu 1 --memory 2Gi --tasks 1 --max-retries 1 --task-timeout 3600 \
   --add-volume "$VOLUME" --add-volume-mount volume=donnees,mount-path=/donnees
-gcloud run jobs add-iam-policy-binding "$JOB" --project "$PROJET" --region "$REGION" \
+reessayer gcloud run jobs add-iam-policy-binding "$JOB" --project "$PROJET" --region "$REGION" \
   --member "serviceAccount:${COMPTE_WEB}" --role roles/run.jobsExecutorWithOverrides >/dev/null
 
 etape "8/8 Service web (${SERVICE}) protégé par IAP : comptes @${DOMAINE} uniquement"

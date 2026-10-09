@@ -70,12 +70,14 @@ Tout s'arrête quand personne ne s'en sert (aucune instance permanente, pas d'é
 Dans [Cloud Shell](https://shell.cloud.google.com) (gratuit, `gcloud` déjà installé) :
 
 ```bash
-git clone https://github.com/mhmedammara/CV-formatter-LL.git
+gh auth login        # dépôt privé : GitHub.com, HTTPS, connexion par le navigateur (une seule fois)
+gh repo clone mhmedammara/CV-formatter-LL
 cd CV-formatter-LL
-git checkout deploiement-cloud-run
 gcloud config set project MON-PROJET
-bash deploiement/deployer.sh
+RETENTION=730 bash deploiement/deployer.sh
 ```
+
+On déploie toujours la branche `main` : elle correspond à ce qui est en ligne.
 
 Le script active les API, crée le dépôt d'images, construit l'image (≈ 6 min la première fois ; ensuite 1 à 2 min, les couches LibreOffice et Python étant reprises de l'image précédente), crée le bucket et sa règle de
 suppression, demande la clé OpenAI (une seule fois, saisie masquée, stockée dans Secret Manager), crée les deux
@@ -84,8 +86,9 @@ l'adresse à donner à l'équipe.
 
 Paramètres facultatifs : `REGION=… DOMAINE=… BUCKET=… RETENTION=… bash deploiement/deployer.sh` (`RETENTION=0` : conservation sans limite ; à relancer avec la même valeur à chaque mise à jour).
 
-**Mettre à jour** : `git pull` puis relancer `bash deploiement/deployer.sh` (les éléments existants sont
-conservés ; seule l'image change).
+**Mettre à jour** : `git pull` puis relancer `RETENTION=730 bash deploiement/deployer.sh` (les éléments existants
+sont conservés ; seule l'image change). Toujours avec la même valeur de `RETENTION` : sans elle, le script revient
+à 30 jours et le bucket supprime les fichiers plus anciens. Le pied de page du site indique le commit déployé.
 
 ## Gérer les accès
 

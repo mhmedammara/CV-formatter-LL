@@ -69,7 +69,7 @@ gcloud artifacts repositories set-cleanup-policies "$DEPOT" --location "$REGION"
   --policy /tmp/nettoyage-images.json --no-dry-run >/dev/null
 
 etape "3/8 Construction de l'image (Cloud Build) : ${IMAGE}"
-reessayer gcloud builds submit --project "$PROJET" --tag "$IMAGE" .
+gcloud builds submit --project "$PROJET" --tag "$IMAGE" .
 
 etape "4/8 Bucket des lots (suppression automatique après ${RETENTION} jours)"
 if ! gcloud storage buckets describe "gs://${BUCKET}" --project "$PROJET" >/dev/null 2>&1; then

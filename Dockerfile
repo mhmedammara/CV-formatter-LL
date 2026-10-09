@@ -18,7 +18,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # LibreOffice : PPTX -> PDF et Word -> PDF ; Tesseract (français) : OCR des CV scannés.
 # Liberation Sans : métriques identiques à Arial, police des puces « • » du modèle (sans elle, LibreOffice
 # prend DejaVu Sans, plus haute, et décale les lignes à puce).
-RUN apt-get update \
+RUN export DEBIAN_FRONTEND=noninteractive && apt-get update \
  && apt-get install -y --no-install-recommends \
         libreoffice-impress libreoffice-writer \
         tesseract-ocr tesseract-ocr-fra \

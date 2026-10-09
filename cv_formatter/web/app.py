@@ -7,7 +7,6 @@ IAP. Le service ne doit jamais être déployé en accès public (--no-allow-unau
 
 from __future__ import annotations
 
-
 import datetime as dt
 import os
 from dataclasses import asdict

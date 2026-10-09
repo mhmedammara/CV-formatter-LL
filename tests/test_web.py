@@ -164,7 +164,10 @@ def test_job_traite_un_lot_sans_appel_api(tmp_path: Path, monkeypatch: pytest.Mo
         noms = archive.namelist()
     assert "CV nominatifs/CV Logiclever - Jean DUPONT.pptx" in noms and "CV anonymes/rapport.md" in noms
     assert any(n.startswith("CV d'origine/") for n in noms)
-    assert not any(n.endswith(".json") for n in noms)
+    assert not any(n.endswith("rapport.json") for n in noms)
+    assert "CV nominatifs/CV Logiclever - Jean DUPONT.json" in noms
+    donnees_anonymes = json.loads((sortie / "anonyme" / anonyme["cv"][0]["json"]).read_text(encoding="utf-8"))
+    assert "DUPONT" not in json.dumps(donnees_anonymes, ensure_ascii=False) and donnees_anonymes["nom_affiche"] == "J. D."
 
 
 def test_job_signale_une_archive_illisible(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

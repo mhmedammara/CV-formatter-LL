@@ -10,7 +10,7 @@ Google Logiclever, dépose les CV et télécharge les PDF et PowerPoint. Rien à
    **nominative**, **anonyme** ou **les deux**, et au besoin « Retirer les coordonnées ».
 3. **Lancer** : l'avancement s'affiche (lecture, extraction, contre-vérification, mise en page, PDF). On peut fermer
    la page : le traitement continue et le lot reste dans l'**Historique**.
-4. **Résultats** : pour chaque CV, le PDF (aperçu dans le navigateur), le PowerPoint, le CV d'origine et le détail du contrôle (à
+4. **Résultats** : pour chaque CV, le PDF (aperçu dans le navigateur), le PowerPoint, le JSON (contenu du CV tel qu'affiché), le CV d'origine et le détail du contrôle (à
    vérifier, retiré, remarques) ; **Tout télécharger (.zip)** donne les fichiers rangés par version avec les rapports, et les CV déposés (« CV d'origine »).
 
 Les lots sont supprimés automatiquement au bout de 30 jours.

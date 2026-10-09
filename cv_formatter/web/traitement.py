@@ -84,7 +84,7 @@ def traiter(lot_id: str) -> int:
             avancement.version = version
             sortie = travail / "sortie" / version
             arguments = [str(entree), "--sortie", str(sortie), "--donnees", str(lots.DONNEES / "cache"),
-                         "--cache-par-empreinte", "--photos", str(sortie / "photos")]
+                         "--cache-par-empreinte", "--exporter-json", "--photos", str(sortie / "photos")]
             if version == "anonyme":
                 arguments.append("--anonymiser")
             if lot.options.sans_coordonnees:
@@ -96,7 +96,7 @@ def traiter(lot_id: str) -> int:
     # Archive de tout le lot : PPTX, PDF, rapports et photos du rapport, rangés par version.
     with zipfile.ZipFile(sortie_lot / "resultats.zip", "w", zipfile.ZIP_DEFLATED) as archive:
         for relatif in copies:
-            if relatif.suffix.lower() != ".json":
+            if relatif.name != "rapport.json":
                 archive.write(sortie_lot / relatif, f"{lots.VERSIONS[relatif.parts[0]]}/{Path(*relatif.parts[1:])}")
         for depose in sorted((lot.dossier / "entree").iterdir()):
             if depose.is_file():

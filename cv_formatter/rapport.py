@@ -19,6 +19,7 @@ class CVReport:
     name: str = ""
     pptx: Path | None = None
     pdf: Path | None = None
+    json: Path | None = None  # contenu du CV en JSON (--exporter-json)
     pdf_engine: str = ""  # moteur qui a produit le PDF (PowerPoint, LibreOffice calé sur PowerPoint)
     pages: int = 0
     extractor: str = ""
@@ -117,6 +118,7 @@ def write_report_json(reports: list[CVReport], target: Path, settings: str) -> P
             "erreur": r.error,
             "pptx": rel(r.pptx),
             "pdf": rel(r.pdf),
+            "json": rel(r.json),
             "moteur_pdf": r.pdf_engine or None,
             "pages": r.pages,
             "extraction": r.extractor,

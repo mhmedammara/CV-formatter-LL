@@ -58,6 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("entrees", nargs="*", type=Path, help="Dossiers, fichiers ou .zip (défaut : le dossier Input du projet)")
     parser.add_argument("--sortie", type=Path, default=DEFAULT_OUTPUT_DIR, help="Dossier de sortie (défaut : ./sortie)")
     parser.add_argument("--anonymiser", action="store_true", help="CV anonyme : initiales, ni photo, ni e-mail, ni téléphone, ni LinkedIn")
+    parser.add_argument("--exporter-json", action="store_true", help="Écrit à côté de chaque PPTX le contenu du CV en JSON (tel qu'affiché : contrôlé, anonymisé s'il y a lieu)")
     parser.add_argument("--sans-coordonnees", action="store_true", help="Retire e-mail, téléphone, localisation et LinkedIn (nom et photo conservés)")
     parser.add_argument("--modele", default=DEFAULT_MODEL, help=f"Modèle OpenAI (défaut : {DEFAULT_MODEL})")
     parser.add_argument("--effort", default=DEFAULT_EFFORT, choices=EFFORT_CHOICES, help=f"Effort de raisonnement (défaut : {DEFAULT_EFFORT})")
@@ -493,6 +494,13 @@ def run(args: argparse.Namespace, progress: Progress | None = None) -> int:
             )
             job.pptx = target
             report.pptx = target
+            if args.exporter_json:
+                donnees = final.model_dump(mode="json")
+                donnees["contact"] = contact
+                donnees.pop("photo_candidate", None)
+                export = {"nom_affiche": name, "experience_affichee": label, **donnees}
+                report.json = target.with_suffix(".json")
+                report.json.write_text(json.dumps(export, ensure_ascii=False, indent=2), encoding="utf-8")
             report.pages = result.pages
             report.layout_notes = result.notes
         except PermissionError:

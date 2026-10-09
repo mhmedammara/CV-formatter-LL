@@ -1,0 +1,25 @@
+# Rien de personnel ni de secret dans l'image : CV, sorties, clé API.
+.env
+Input/
+input/
+entree/
+sortie/
+sortie anonyme/
+donnees-web/
+drive-download-*/
+*.zip
+Copy of Copy of CV 2025_Template_Logiclever.pptx
+
+# Inutile à l'exécution
+.git/
+.gitignore
+.pytest_cache/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.bat
+tests/
+outils/
+README.md
+deploiement/

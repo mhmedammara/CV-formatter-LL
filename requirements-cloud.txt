@@ -1,0 +1,5 @@
+# Service web et job de traitement (Google Cloud Run) : dépendances de l'outil + serveur web.
+-r requirements.txt
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9

@@ -1,0 +1,4 @@
+# Fichiers exécutés sous Linux (Cloud Shell, image Docker) : fins de ligne Unix, quel que soit le poste.
+*.sh text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf

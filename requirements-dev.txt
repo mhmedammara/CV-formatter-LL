@@ -1,1 +1,3 @@
+# Tests : python -m pytest -q (les tests du service web demandent aussi requirements-cloud.txt)
 pytest>=8.0
+httpx>=0.27

@@ -94,3 +94,9 @@ SAFETY_MARGIN = 0.005
 # est jusqu'à 0,75 % plus large que calculé (8 pt rendu à 8,04 pt). Sans marge, une ligne pleine passait à
 # la ligne suivante et le bloc débordait sur le titre de section suivant.
 WIDTH_SAFETY_MARGIN = 0.01
+
+# Position de la ligne de base dans une ligne PowerPoint (en em, depuis le haut de la ligne), selon
+# l'interligne du paragraphe. Mesuré sur une diapositive de calibrage (6,5 à 14 pt, 4 graisses), puis validé
+# sur les PDF PowerPoint des 14 CV de test : 1 023 lignes retrouvées à 0,044 mm près. Sert au rendu PDF par
+# LibreOffice (libreoffice.py), qui doit reproduire ces positions.
+POWERPOINT_BASELINE = {0.9: 0.8404, 1.0: 0.9648, 1.05: 0.9518, 1.1: 0.9964, 1.15: 1.0407}

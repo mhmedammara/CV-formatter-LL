@@ -68,24 +68,34 @@ def text_width(text: str, style: str, size: float) -> float:
     return _font(style).text_length(text, fontsize=size)
 
 
-def _words(para: Para) -> list[tuple[float, list[tuple[str, Run]]]]:
-    """Découpe le paragraphe en mots, chacun avec la largeur (points) des espaces qui le précèdent ; un mot
-    peut chevaucher plusieurs runs. Tous les espaces comptent : PowerPoint ne fusionne pas les espaces
+@dataclass
+class _Word:
+    space: float  # largeur (points) des espaces qui précèdent le mot
+    pieces: list[tuple[str, Run]]  # un mot peut chevaucher plusieurs runs
+    start: int  # position du mot dans Para.text
+
+
+def _words(para: Para) -> list[_Word]:
+    """Découpe le paragraphe en mots. Tous les espaces comptent : PowerPoint ne fusionne pas les espaces
     consécutifs (« Scrum  ·  SAFe »)."""
-    words: list[tuple[float, list[tuple[str, Run]]]] = []
+    words: list[_Word] = []
     current: list[tuple[str, Run]] = []
     spaces = 0.0
+    start = position = 0
     for run in para.runs:
         for piece in re.split(r"( )", run.text):
             if piece == " ":
                 if current:
-                    words.append((spaces, current))
+                    words.append(_Word(spaces, current, start))
                     current, spaces = [], 0.0
                 spaces += text_width(" ", run.style, run.size)
             elif piece:
+                if not current:
+                    start = position
                 current.append((piece, run))
+            position += len(piece)
     if current:
-        words.append((spaces, current))
+        words.append(_Word(spaces, current, start))
     return words
 
 
@@ -94,42 +104,74 @@ def _usable(width_cm: float) -> float:
     return (width_cm - 2 * TEXT_INSET) * PT_PER_CM / (1 + WIDTH_SAFETY_MARGIN)
 
 
-def wrap(para: Para, width_cm: float) -> list[float]:
-    """Renvoie la taille de police dominante de chaque ligne après césure (les espaces en fin de ligne,
-    comme dans PowerPoint, ne comptent pas)."""
+@dataclass
+class Line:
+    """Ligne après césure : taille de police dominante et caractères de Para.text qu'elle affiche
+    (de start inclus à end exclu, sans les espaces de fin de ligne)."""
+
+    size: float
+    start: int
+    end: int
+
+
+def lines(para: Para, width_cm: float) -> list[Line]:
+    """Césure du paragraphe, reproduite ligne par ligne comme PowerPoint (les espaces en fin de ligne ne
+    comptent pas ; un mot plus large que la ligne est coupé au caractère)."""
     available = max(1.0, _usable(width_cm - para.indent))
-    lines: list[float] = []
+    breaks: list[tuple[float, int]] = []  # (taille dominante, fin) de chaque ligne
     line_width = 0.0
     line_size = 0.0
-    for space, word in _words(para):
-        word_width = sum(text_width(piece, run.style, run.size) for piece, run in word)
-        word_size = max(run.size for _, run in word)
+    end = 0
+    for word in _words(para):
+        word_width = sum(text_width(piece, run.style, run.size) for piece, run in word.pieces)
+        word_size = max(run.size for _, run in word.pieces)
+        word_end = word.start + sum(len(piece) for piece, _ in word.pieces)
         if line_width == 0.0:
             if word_width <= available:
-                line_width, line_size = word_width, word_size
+                line_width, line_size, end = word_width, word_size, word_end
                 continue
-        elif line_width + space + word_width <= available:
-            line_width += space + word_width
+        elif line_width + word.space + word_width <= available:
+            line_width += word.space + word_width
             line_size = max(line_size, word_size)
+            end = word_end
             continue
         else:
-            lines.append(line_size)
+            breaks.append((line_size, end))
             line_width, line_size = 0.0, 0.0
             if word_width <= available:
-                line_width, line_size = word_width, word_size
+                line_width, line_size, end = word_width, word_size, word_end
                 continue
         # Mot plus large que la ligne : PowerPoint le coupe au caractère.
-        for piece, run in word:
+        position = word.start
+        for piece, run in word.pieces:
             for char in piece:
                 char_width = text_width(char, run.style, run.size)
                 if line_width + char_width > available and line_width > 0:
-                    lines.append(line_size)
+                    breaks.append((line_size, position))
                     line_width, line_size = 0.0, 0.0
                 line_width += char_width
                 line_size = max(line_size, run.size)
-    if line_width > 0 or not lines:
-        lines.append(line_size or para.max_size)
-    return lines
+                position += 1
+                end = position
+    if line_width > 0 or not breaks:
+        breaks.append((line_size or para.max_size, end))
+    # Chaque ligne reprend là où la précédente s'arrête (espaces de la coupure exclus) : aucun caractère perdu.
+    text = para.text
+    found: list[Line] = []
+    start = 0
+    for size, stop in breaks:
+        found.append(Line(size, start, max(start, stop)))
+        start = max(start, stop)
+        while start < len(text) and text[start] == " ":
+            start += 1
+    if found and start < len(text):  # caractères sans largeur après le dernier mot
+        found[-1].end = len(text)
+    return found
+
+
+def wrap(para: Para, width_cm: float) -> list[float]:
+    """Renvoie la taille de police dominante de chaque ligne après césure."""
+    return [line.size for line in lines(para, width_cm)]
 
 
 def line_count(para: Para, width_cm: float) -> int:

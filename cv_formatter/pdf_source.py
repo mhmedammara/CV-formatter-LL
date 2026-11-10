@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pymupdf
 from numpy.typing import NDArray
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 from . import ocr
 from .export_pdf import libreoffice, soffice_convert
@@ -241,24 +241,58 @@ def _to_pdf_bytes(path: Path) -> bytes:
     raise ValueError(f"Format non pris en charge : {path.suffix}")
 
 
-def _visible_photo(pdf_bytes: bytes, page_index: int, xref: int, rect: pymupdf.Rect) -> tuple[Image.Image, float] | None:
-    """Rend la zone avec et sans l'image : la différence donne exactement la partie visible."""
-    zoom = 5.0
+COVERAGE_THRESHOLD = 64  # écart de rendu noir / blanc (sur 255) à partir duquel un pixel est couvert par l'image
+
+
+def _render_zone(
+    pdf_bytes: bytes,
+    page_index: int,
+    clip: pymupdf.Rect,
+    matrix: pymupdf.Matrix,
+    solid: tuple[int, tuple[int, int, int]] | None = None,
+) -> Image.Image:
+    """Rend la zone `clip` de la page. Avec `solid` = (xref, couleur), l'image est d'abord remplacée par un aplat
+    opaque de cette couleur : sa découpe et son masque de transparence sont gardés, pas ses pixels.
+    Un document neuf par rendu : PyMuPDF 1.24 resservirait l'ancien rendu d'une page déjà modifiée."""
     with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
         page = doc[page_index]
-        clip = (rect + (-2, -2, 2, 2)) & page.rect
-        matrix = pymupdf.Matrix(zoom, zoom)
-        with_image = page.get_pixmap(matrix=matrix, clip=clip, alpha=False)
-        page.delete_image(xref)
-        without_image = page.get_pixmap(matrix=matrix, clip=clip, alpha=False)
-    a = Image.frombytes("RGB", (with_image.width, with_image.height), with_image.samples)
-    b = Image.frombytes("RGB", (without_image.width, without_image.height), without_image.samples)
-    mask = ImageChops.difference(a, b).convert("L").point([255 if v > 12 else 0 for v in range(256)])
+        if solid is not None:
+            xref, color = solid
+            # Transparence propre à l'image : masque progressif (/SMask) ou masque binaire (/Mask), par exemple une photo
+            # détourée. Le remplacement écrase tout l'objet image, on la remet.
+            masks = [(key, doc.xref_get_key(xref, key)) for key in ("SMask", "Mask")]
+            pixmap = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 8, 8), False)
+            pixmap.set_rect(pixmap.irect, color)
+            page.replace_image(xref, pixmap=pixmap)
+            for key, (kind, value) in masks:
+                if kind == "xref":
+                    doc.xref_set_key(xref, key, value)
+        rendered = page.get_pixmap(matrix=matrix, clip=clip, alpha=False)
+    return Image.frombytes("RGB", (rendered.width, rendered.height), rendered.samples)
+
+
+def _visible_photo(pdf_bytes: bytes, page_index: int, xref: int, rect: pymupdf.Rect) -> tuple[Image.Image, float] | None:
+    """Photo telle qu'on la voit dans la page, et part de son cadre qu'elle remplit (1 = rectangle plein).
+
+    La zone visible se lit en rendant la page avec l'image remplacée par un aplat noir puis blanc : un pixel couvert
+    par l'image vaut 0 puis 255, un pixel non couvert est identique dans les deux rendus, quoi qu'il y ait derrière.
+    Comparer la page avec et sans l'image ne convient pas : les pixels de la photo proches du fond (costume sombre sur
+    un bandeau noir, photo claire sur page blanche) passent pour « absents » et finissent blanchis ou rognés."""
+    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
+        clip = (rect + (-2, -2, 2, 2)) & doc[page_index].rect
+    matrix = pymupdf.Matrix(5.0, 5.0)
+    a = _render_zone(pdf_bytes, page_index, clip, matrix)  # la photo telle qu'on la voit
+    black = _render_zone(pdf_bytes, page_index, clip, matrix, (xref, (0, 0, 0)))
+    white = _render_zone(pdf_bytes, page_index, clip, matrix, (xref, (255, 255, 255)))
+    coverage = np.abs(np.asarray(white, dtype=np.int16) - np.asarray(black, dtype=np.int16)).max(axis=2)
+    mask = Image.fromarray(((coverage > COVERAGE_THRESHOLD) * 255).astype(np.uint8))
     mask = mask.filter(ImageFilter.MaxFilter(3)).filter(ImageFilter.MinFilter(3))
     bbox = mask.getbbox()
     if bbox is None:
         return None
     image, mask = a.crop(bbox), mask.crop(bbox)
+    if min(image.getextrema()[c][0] for c in range(3)) >= 243:
+        return None  # image blanche : invisible sur la page, jamais une photo (et ne décale pas la numérotation des candidates)
     fill = mask.histogram()[255] / float(mask.width * mask.height)
     if fill < 0.92:  # forme non rectangulaire (cercle, ovale, détourage)
         image = _inscribed_circle(image, mask) or Image.composite(image, Image.new("RGB", image.size, "white"), mask)

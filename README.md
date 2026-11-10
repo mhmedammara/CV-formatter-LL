@@ -306,9 +306,11 @@ rangée en certification n'est affichée qu'une fois.
 
 1. **Candidates** : images de 60 px minimum, proportions 0,55–1,8, occupant 0,2 % à 15 % de la page.
 2. **Choix** : le modèle reçoit les vignettes et indique laquelle est le visage du consultant (ou aucune).
-3. **Recadrage sur la zone réellement visible** : la page est rendue avec et sans l'image ; la différence des
-   pixels donne exactement ce que l'on voit dans le CV — y compris pour une photo **pivotée**, rognée en
-   **cercle** ou **détourée**. Forme irrégulière (ovale, « galet ») : plus grand cercle de la forme qui contient
+3. **Recadrage sur la zone réellement visible** : la page est rendue avec l'image remplacée par un aplat noir,
+   puis par un aplat blanc ; les pixels qui changent entre les deux rendus sont exactement ceux que l'image couvre
+   dans le CV — y compris pour une photo **pivotée**, rognée en **cercle** ou **détourée**, et quelles que soient
+   les couleurs de la photo et de ce qu'il y a derrière (bandeau sombre, page blanche). Forme irrégulière
+   (ovale, « galet ») : plus grand cercle de la forme qui contient
    tout le visage (repéré par le détecteur), sinon forme d'origine conservée — jamais de visage coupé. Puis
    recadrage carré (haut privilégié pour un portrait vertical), JPEG 800 px.
 4. **Contrôle du visage** (`visage.py`) : la photo retenue passe dans un détecteur de visage local (YuNet
@@ -414,7 +416,7 @@ d'un CV scanné retrouvés, contre 97 % ; conversion Word → PDF par LibreOffic
 | Une page, pages de suite réservées aux expériences | Demande de l'équipe commerciale : un CV client se lit en une page | Pagination libre |
 | Réduire / masquer, jamais résumer | Résumer, c'est reformuler, donc risquer d'inventer | Résumés automatiques |
 | Mesure du texte avec les vraies polices, calibrée sur PowerPoint | Garantit l'absence de débordement sans intervention | Ajustement automatique de PowerPoint (non appliqué aux fichiers générés, rendu imprévisible) |
-| Photo par différence de rendu | Fidèle à ce qui est visible (rotations, cercles, détourages) | Extraire l'image brute (souvent pivotée ou beaucoup plus grande que la partie visible) |
+| Photo par rendu noir puis blanc | Fidèle à ce qui est visible (rotations, cercles, détourages), sans dépendre des couleurs de la photo ni du fond | Extraire l'image brute (souvent pivotée ou beaucoup plus grande que la partie visible) ; comparer la page avec et sans l'image (les pixels de la photo proches du fond, costume sombre sur bandeau noir, passent pour « absents » : taches blanches) |
 | Cache des extractions | Coût et temps : un CV n'est envoyé qu'une fois ; corrections manuelles possibles | Ré-extraction à chaque lancement |
 | Copie nettoyée du modèle, champs repérés par balises | Fichiers légers ; le modèle peut évoluer sans toucher au code | Positions codées en dur |
 | Polices installées + intégrées par PowerPoint | Rendu identique partout, PDF comme PPTX | Laisser les sous-ensembles du modèle (glyphes manquants) |

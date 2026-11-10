@@ -570,6 +570,81 @@ def test_pdf_photo_candidate_detected(tmp_path: Path):
     assert len(source.candidates) == 1 and source.text_is_reliable
 
 
+def _pdf_with_photo(
+    tmp_path: Path, photo: Image.Image, banner: tuple[float, float, float] | None, stencil: Image.Image | None = None
+) -> Path:
+    """CV d'une page : photo (115 x 150 pt) qui dépasse d'un bandeau d'en-tête, comme dans les CV réels.
+    `stencil` : forme de la photo (blanc = visible) posée en masque binaire /Mask, comme le font certains pilotes PDF."""
+    import numpy as np
+
+    buf = io.BytesIO()
+    photo.save(buf, "PNG")  # sans perte : les pixels de la photo restent exacts
+    doc = pymupdf.open()
+    page = doc.new_page(width=595, height=842)
+    if banner:
+        page.draw_rect(pymupdf.Rect(0, 100, 595, 230), color=None, fill=banner)
+    xref = page.insert_image(pymupdf.Rect(60, 90, 175, 240), stream=buf.getvalue())
+    if stencil is not None:  # image-masque à 1 bit par pixel : 0 = peint, 1 = transparent
+        mask = doc.get_new_xref()
+        doc.update_object(mask, f"<< /Type /XObject /Subtype /Image /Width {photo.width} /Height {photo.height} /ImageMask true /BitsPerComponent 1 >>")
+        doc.update_stream(mask, np.packbits(np.asarray(stencil.convert("L")) == 0, axis=1).tobytes(), new=True)
+        doc.xref_set_key(xref, "Mask", f"{mask} 0 R")
+    for i, line in enumerate(["Jean DUPONT — Chef de projet SI", "Expérience : ACME Conseil, 2020 - 2024", "Compétences : SAP, Power BI"]):
+        page.insert_text((200, 300 + 20 * i), line, fontsize=12)  # assez de texte : page non scannée
+    pdf = tmp_path / "cv.pdf"
+    doc.save(pdf)
+    return pdf
+
+
+def test_photo_dark_on_dark_banner_has_no_white_spots(tmp_path: Path):
+    """Photo sombre posée sur le bandeau noir de l'en-tête : la zone visible ne dépend pas de la couleur du fond.
+    Ses pixels proches du bandeau (costume, cheveux) passaient pour « hors de la photo » et étaient blanchis."""
+    import numpy as np
+
+    photo = Image.new("RGB", (300, 330), (160, 165, 170))
+    ImageDraw.Draw(photo).rectangle((40, 150, 260, 330), fill=(18, 24, 40))  # costume bleu nuit, presque le noir du bandeau
+    candidate = load_source(_pdf_with_photo(tmp_path, photo, (0.1, 0.1, 0.1))).candidates[0]
+    assert candidate.fill_ratio > 0.99  # rectangle plein, pas une « forme » à détourer
+    pixels = np.asarray(candidate.image)
+    assert (pixels.min(axis=2) >= 250).mean() < 0.01  # aucune tache blanche
+    assert pixels[int(pixels.shape[0] * 0.85), pixels.shape[1] // 2].max() < 60  # le costume est resté sombre
+
+
+def test_pale_photo_on_white_page_is_not_cropped(tmp_path: Path):
+    """Photo très claire sur une page blanche : tout le cadre est gardé (elle était rognée à ses seules parties foncées)."""
+    photo = Image.new("RGB", (300, 330), (249, 249, 249))
+    ImageDraw.Draw(photo).ellipse((100, 60, 200, 180), fill=(205, 175, 155))
+    candidate = load_source(_pdf_with_photo(tmp_path, photo, None)).candidates[0]
+    assert candidate.fill_ratio > 0.99
+    # Cadre entier : 115 pt de large à 5 px par point, hauteur dans les proportions de la photo (300 x 330).
+    assert candidate.image.width >= 570 and candidate.image.height >= 625
+
+
+def test_blank_white_image_is_not_a_photo_candidate(tmp_path: Path):
+    """Image toute blanche sur une page blanche (calage, fond) : pas une candidate, sinon elle décalerait la numérotation
+    des suivantes et le numéro `photo_candidate` déjà enregistré dans le cache pointerait sur une autre image."""
+    assert load_source(_pdf_with_photo(tmp_path, Image.new("RGB", (300, 330), "white"), None)).candidates == []
+
+
+@pytest.mark.parametrize("mask", ["progressif", "binaire"])
+def test_cutout_photo_keeps_its_shape_on_dark_banner(tmp_path: Path, mask: str):
+    """Photo détourée sur un bandeau noir, par un masque de transparence progressif (PNG à fond transparent) ou binaire
+    (/Mask) : la forme est celle de l'image, l'extérieur est blanchi et le costume sombre ne l'est pas."""
+    import numpy as np
+
+    photo = Image.new("RGB", (300, 330), (160, 165, 170))
+    ImageDraw.Draw(photo).rectangle((40, 150, 260, 330), fill=(18, 24, 40))
+    shape = Image.new("L", photo.size, 0)
+    ImageDraw.Draw(shape).ellipse((0, 0, photo.width - 1, photo.height - 1), fill=255)
+    if mask == "progressif":
+        photo.putalpha(shape)
+    candidate = load_source(_pdf_with_photo(tmp_path, photo, (0.1, 0.1, 0.1), shape if mask == "binaire" else None)).candidates[0]
+    assert 0.7 < candidate.fill_ratio < 0.85  # une ellipse remplit π/4 ≈ 0,785 de son cadre
+    pixels = np.asarray(candidate.image)
+    assert pixels[0, 0].min() >= 250  # coin hors de la forme : blanc, pas noir comme le bandeau
+    assert pixels[int(pixels.shape[0] * 0.8), pixels.shape[1] // 2].max() < 60  # le costume est resté sombre
+
+
 # --- Typographie / mesure -------------------------------------------------------------------
 
 

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 # À incrémenter quand la consigne ou le schéma changent : les extractions enregistrées avec une version
 # antérieure sont refaites au lancement suivant (sauf JSON corrigé à la main ou --depuis-json).
-EXTRACTION_VERSION = 12
+EXTRACTION_VERSION = 13
 
 SYSTEM_PROMPT = """\
 Tu es l'assistant de l'équipe commerciale de Logiclever, une ESN française. Tu reçois le CV \
@@ -63,8 +63,9 @@ recopié, terminé par « : », comme une ligne d'intitulé, puis ses puces à l
 interne chez EY : »). Ne mets jamais ce titre dans contexte, qui ne contient que la ligne « Mission : … » de \
 cette expérience.
 - Dates (debut, fin) : abréviations françaises Janv=01, Févr=02, Mars=03, Avr=04, Mai=05, Juin=06, Juill=07, \
-Août=08, Sept=09, Oct=10, Nov=11, Déc=12. Quand seule la fin porte l'année (« Juin – Oct 2020 », « Juill – \
-Dec 2018 »), le début prend cette année.
+Août=08, Sept=09, Oct=10, Nov=11, Déc=12. Quand seule la fin porte l'année, le début prend cette année. \
+Exemples exacts : « Juill – Dec 2018 » → debut = 2018-07 et fin = 2018-12 (jamais debut = fin) ; « Juin – Oct \
+2020 » → debut = 2020-06 et fin = 2020-10 ; « Janv – Mars 2020 » → debut = 2020-01 et fin = 2020-03.
 - environnement d'une expérience : les lignes « Environnement », « Env. technique », « Tech. »… vont \
 dans ce champ (non affiché), jamais dans les réalisations.
 - competences_detaillees : recopie complète des compétences techniques catégorisées, seulement si \

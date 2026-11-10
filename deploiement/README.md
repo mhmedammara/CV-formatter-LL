@@ -90,6 +90,17 @@ Paramètres facultatifs : `REGION=… DOMAINE=… BUCKET=… RETENTION=… bash 
 sont conservés ; seule l'image change). Toujours avec la même valeur de `RETENTION` : sans elle, le script revient
 à 30 jours et le bucket supprime les fichiers plus anciens. Le pied de page du site indique le commit déployé.
 
+**Mise à jour rapide** (nouvelle version du code seulement, une fois le déploiement initial fait) :
+
+```bash
+bash deploiement/mettre-a-jour.sh            # branche main
+bash deploiement/mettre-a-jour.sh MA-BRANCHE # pour essayer une branche avant de la fusionner dans main
+```
+
+Construit l'image puis met à jour le job et le service en parallèle ; ne touche ni au bucket (pas de `RETENTION` à
+repasser), ni au secret, ni aux comptes de service, ni à IAP. C'est le job qui lit les CV et recadre la photo : les
+deux doivent être mis à jour, ce que fait le script.
+
 ## Gérer les accès
 
 Tout le domaine est autorisé par défaut. Pour n'ouvrir l'accès qu'à certaines personnes ou à un groupe :

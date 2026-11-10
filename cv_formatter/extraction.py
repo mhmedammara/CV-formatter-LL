@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 # À incrémenter quand la consigne ou le schéma changent : les extractions enregistrées avec une version
 # antérieure sont refaites au lancement suivant (sauf JSON corrigé à la main ou --depuis-json).
-EXTRACTION_VERSION = 11
+EXTRACTION_VERSION = 12
 
 SYSTEM_PROMPT = """\
 Tu es l'assistant de l'équipe commerciale de Logiclever, une ESN française. Tu reçois le CV \
@@ -52,6 +52,19 @@ freelance, création d'entreprise). Employeur et client : voir la section dédi�
 - expertise : jusqu'à 8 domaines d'expertise exprimés avec des termes présents dans le CV. Une norme ou \nréglementation (RGPD, DSP2…) n'y va que si le CV la présente comme une compétence, pas si elle est seulement \ncitée dans une réalisation.
 - outils_si : jusqu'à 15 outils et technologies (logiciels, ERP, plateformes, langages…) que le CV \
 présente comme utilisés ou maîtrisés, y compris les méthodologies (Scrum, SAFe, cycle en V…) ; pas \nde normes ni de réglementations (elles vont dans expertise).
+- expertise et outils_si : recopie d'abord, dans l'ordre, les listes que le CV intitule « Compétences » ou \
+« Outils ». N'ajoute un élément venant d'une expérience que s'il y est écrit comme outil (ligne « Outils : » \
+ou équivalent). Un intitulé de poste, un titre de mission ou le verbe d'une puce (« à travers un métier de \
+Data Engineer ») n'est jamais une expertise ; une méthodologie citée seulement dans une puce (SAFe) n'est pas \
+un outil. Mieux vaut moins que le maximum.
+- Rubrique interne (« Investissement interne », « Vie de l'entreprise », « Contributions internes ») placée \
+sous une mission cliente : ce n'est pas une réalisation de cette mission. Dans realisations, écris son titre \
+recopié, terminé par « : », comme une ligne d'intitulé, puis ses puces à la suite (ex. « Investissement \
+interne chez EY : »). Ne mets jamais ce titre dans contexte, qui ne contient que la ligne « Mission : … » de \
+cette expérience.
+- Dates (debut, fin) : abréviations françaises Janv=01, Févr=02, Mars=03, Avr=04, Mai=05, Juin=06, Juill=07, \
+Août=08, Sept=09, Oct=10, Nov=11, Déc=12. Quand seule la fin porte l'année (« Juin – Oct 2020 », « Juill – \
+Dec 2018 »), le début prend cette année.
 - environnement d'une expérience : les lignes « Environnement », « Env. technique », « Tech. »… vont \
 dans ce champ (non affiché), jamais dans les réalisations.
 - competences_detaillees : recopie complète des compétences techniques catégorisées, seulement si \
@@ -65,7 +78,9 @@ LinkedIn) n'en est pas un.
 stages (internship, PFE), même si la mention n'apparaît qu'à côté des dates ; dans le doute, alternance \
 ou stage plutôt qu'emploi (les années d'expérience affichées excluent alternances et stages).
 - contact.localisation : ville (et code postal ou pays s'ils sont écrits), jamais l'adresse complète.
-- sections_non_reprises : titres des sections du CV que tu n'as reprises nulle part.
+- sections_non_reprises : titres des sections du CV que tu n'as reprises nulle part. Liste aussi ce que tu \
+ne reprends pas : paragraphe de présentation, statut (Freelance), permis, graphique ou jauge de niveaux, \
+logos de certification, lignes « Outils » par mission.
 
 EMPLOYEUR ET CLIENT (point critique : une erreur ici fait mentir le CV)
 - entreprise = l'organisation que le bloc de l'expérience nomme lui-même, ou le titre de rubrique qui \

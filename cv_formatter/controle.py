@@ -47,10 +47,6 @@ l'en-tête du CV (nom, titre du consultant), le logo, les coordonnées, une adre
 page ne prouve pas que la personne a travaillé pour cette organisation : réponds "absent". Si le CV \
 nomme l'organisation dans un autre rôle (un client présenté comme employeur, ou l'inverse), réponds \
 "inexact".
-Réalisation : vérifie qu'elle figure sous le titre de CETTE expérience et non sous une rubrique distincte du \
-CV (« Investissement interne », « Projets », « Interne ») ni sous une autre mission : dans ce cas réponds \
-"inexact", avec le titre de la rubrique d'origine dans l'explication. De même, un contexte ne doit contenir que la \
-ligne de mission de cette expérience, pas le titre d'une rubrique voisine.
 Domaine d'expertise ou outil : confirme seulement si le CV le présente comme compétence ou outil du consultant \
 (liste de compétences, ligne « Outils »). Un mot présent seulement dans un intitulé de poste ou dans la phrase \
 d'une réalisation ne suffit pas : réponds "inexact".
@@ -58,7 +54,7 @@ Réponds pour chaque identifiant, sans en oublier, avec une explication courte q
 """
 
 
-CONTROLE_VERSION = 9 # à incrémenter quand la liste des affirmations change (invalide le cache)
+CONTROLE_VERSION = 10# à incrémenter quand la liste des affirmations change (invalide le cache)
 
 
 @dataclass

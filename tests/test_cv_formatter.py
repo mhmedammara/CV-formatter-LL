@@ -450,6 +450,8 @@ def test_originals_are_copied_under_unique_names(tmp_path: Path):
         ("Septembre 2021 - En cours (CDI)", ("2021-09", "present")),
         ("2023 - Mai 2024", ("2023", "2024-05")),
         ("2016 - 2019", ("2016", "2019")),
+        ("Juill – Dec 2018", ("2018-07", "2018-12")),  # « Juill » inconnu : seul « Dec 2018 » était lu (début = fin)
+        ("Juill. 2019 - Août 2020", ("2019-07", "2020-08")),
         ("Depuis 1 an", (None, None)),  # illisible : on garde la lecture du modèle
     ],
 )

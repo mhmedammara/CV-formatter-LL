@@ -26,7 +26,7 @@ _MONTH_TOKENS = {
     4: ("avr", "avril", "apr", "april"),
     5: ("mai", "may"),
     6: ("juin", "jun", "june"),
-    7: ("juil", "juillet", "jul", "july"),
+    7: ("juil", "juill", "juillet", "jul", "july"),
     8: ("aout", "aug", "august"),
     9: ("sep", "sept", "septembre", "september"),
     10: ("oct", "octobre", "october"),
